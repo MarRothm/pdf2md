@@ -1,0 +1,200 @@
+# Feature Specification: Offline Docling PDF-to-Markdown Stack
+
+**Feature Branch**: `001-docling-pdf2md-stack`
+
+**Created**: 2026-08-18
+
+**Status**: Draft
+
+**Input**: User description: "Let's create docker implementation open source tool Docling for converting complex pdf documents into markdown files to be fed into AnythingLLM. The docker container(s) shall run stack in portainer on macmini in same network. stack shall no access to internet. Accessible only from same local network."
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Convert a complex PDF into ingestion-ready Markdown (Priority: P1)
+
+A knowledge worker on the local network has a complex PDF (multi-column layout, tables, figures, headers/footers, scanned pages) that must become searchable knowledge inside AnythingLLM. They open the stack's page in a browser, upload the PDF, watch it convert, and retrieve a Markdown file whose reading order, headings, and tables faithfully reflect the original document.
+
+**Why this priority**: This is the entire reason the stack exists. Without accurate conversion of complex PDFs, nothing else in the feature has value. A single working conversion path is a viable MVP.
+
+**Independent Test**: Upload a representative complex PDF (containing at least one multi-column page, one table, and one scanned page) to the running stack and confirm a Markdown file is produced with correct reading order, a Markdown table for the tabular content, and text recovered from the scanned page.
+
+**Acceptance Scenarios**:
+
+1. **Given** the stack is running and a complex text-based PDF is uploaded, **When** conversion completes, **Then** a Markdown file is produced containing the document's headings as Markdown headings, body text in correct reading order, and tables rendered as Markdown tables.
+2. **Given** a PDF whose pages are scanned images, **When** conversion completes, **Then** the resulting Markdown contains the recognized text of those pages rather than an empty or image-only result.
+3. **Given** a PDF containing embedded images or figures, **When** conversion completes, **Then** the Markdown references or describes each figure in its correct position in the document flow, and no figure silently removes surrounding text.
+4. **Given** a password-protected or corrupt PDF is uploaded, **When** conversion is attempted, **Then** the job is reported as failed on the page with a human-readable reason and no partial Markdown file is presented as a successful result.
+
+---
+
+### User Story 2 - Operate the stack from Portainer on the Mac mini (Priority: P1)
+
+An operator deploys the conversion stack on the Mac mini by pasting or referencing a single stack definition in Portainer. They can start, stop, redeploy, and inspect logs of the stack entirely from Portainer, and after a Mac mini reboot the stack comes back on its own.
+
+**Why this priority**: The stack has no value if it cannot be deployed and kept alive on the target host by its intended operator. Deployment is a hard requirement stated by the user and is testable independently of conversion quality.
+
+**Independent Test**: Deploy the stack in Portainer on the Mac mini from the provided stack definition without editing files on the host by hand, confirm all services reach a healthy state, restart the Mac mini, and confirm the stack returns to a healthy state unattended.
+
+**Acceptance Scenarios**:
+
+1. **Given** Portainer is running on the Mac mini and one-time provisioning is complete, **When** the operator deploys the provided stack definition, **Then** all services start and report a healthy status within 10 minutes on first deploy (model warm-up) and 5 minutes on redeploy, with no further host-side steps.
+2. **Given** the stack is running, **When** the operator stops and redeploys it from Portainer, **Then** previously converted Markdown files and job history remain intact.
+3. **Given** the Mac mini is rebooted, **When** the host finishes starting, **Then** the stack returns to a healthy state without operator intervention.
+4. **Given** a conversion service fails or crashes, **When** the operator opens the stack logs in Portainer, **Then** the logs identify which document failed and why, in plain text, without requiring access to the host shell.
+
+---
+
+### User Story 3 - Guarantee the stack is offline and LAN-only (Priority: P1)
+
+A security-conscious owner must be able to demonstrate that the stack never reaches the internet and cannot be reached from outside the local network, including at first start on a freshly provisioned Mac mini.
+
+**Why this priority**: "No internet access" and "local network only" are explicit, non-negotiable constraints from the user. They also constrain the design of every other story, because anything the stack needs at runtime must already be inside it.
+
+**Independent Test**: With the Mac mini's internet path blocked (or the stack's egress disabled), deploy the stack from scratch and run a full conversion end to end; separately, attempt to reach the stack's interfaces from a host outside the local network and confirm the attempt fails.
+
+**Acceptance Scenarios**:
+
+1. **Given** the host has no route to the internet, **When** the stack is deployed and a document is converted, **Then** conversion succeeds with no failures attributable to missing downloads.
+2. **Given** the stack is running normally, **When** its outbound network activity is observed over a full conversion cycle, **Then** no connection attempts leave the local network.
+3. **Given** a client on the same local network, **When** it opens the stack's interface, **Then** access is granted; **Given** a client outside the local network, **When** it attempts the same, **Then** access is refused.
+4. **Given** all recognition and layout models required for conversion, **When** the stack starts for the first time on a machine that has never run it, **Then** those models are already present inside the deployment and no runtime download is attempted.
+
+---
+
+### User Story 4 - Collect converted Markdown for import into AnythingLLM (Priority: P2)
+
+Converted Markdown accumulates in one dedicated output location on the Mac mini, and is also downloadable from the browser page. An operator periodically takes what is there and imports it into AnythingLLM by hand, confident that every file is complete, uniquely named, and traceable to its source PDF.
+
+**Why this priority**: This completes the intended workflow into AnythingLLM. It ranks below conversion itself because conversion (P1) already delivers standalone value, and the import step is deliberately manual.
+
+**Independent Test**: Convert a small set of PDFs, confirm each finished file appears in the output location with a stable unique name and can also be downloaded from the page, then import that batch into AnythingLLM and confirm it answers questions citing those documents.
+
+**Acceptance Scenarios**:
+
+1. **Given** a PDF has been converted successfully, **When** the job finishes, **Then** the Markdown file appears in the dedicated output location with a name that is stable, unique, and traceable back to the source PDF.
+2. **Given** a job shows as completed on the page, **When** the user chooses to retrieve it, **Then** the converted Markdown is downloaded to their machine over the local network.
+3. **Given** a source PDF is converted a second time, **When** the job finishes, **Then** the output location does not accumulate ambiguous duplicates that would cause the same content to be imported twice under different identities.
+4. **Given** a conversion fails, **When** the job ends, **Then** no file for that document is placed in the output location.
+5. **Given** the operator imports the output location's contents into AnythingLLM, **When** they query AnythingLLM, **Then** answers cite the correct source documents.
+
+---
+
+### User Story 5 - Convert a batch of documents unattended (Priority: P3)
+
+A user selects a whole set of PDFs on the upload page in one go and lets the stack work through them, checking back on the page later to see which succeeded and which failed.
+
+**Why this priority**: A quality-of-life improvement over single-document conversion. Valuable at volume, but the stack is already useful without it.
+
+**Independent Test**: Upload a batch containing a mix of valid and invalid PDFs, leave it unattended, and confirm every valid document is converted, every invalid one is reported as failed, and the batch does not stall.
+
+**Acceptance Scenarios**:
+
+1. **Given** multiple documents are submitted at once, **When** the stack processes them, **Then** each document is converted and reported individually, and one failing document does not prevent the others from completing.
+2. **Given** a batch is in progress, **When** the user looks at the page, **Then** they can see which documents are queued, running, completed, or failed.
+3. **Given** the stack is restarted mid-batch, **When** it comes back up, **Then** documents that had not completed are either resumed or clearly reported as incomplete on the page rather than silently lost.
+
+---
+
+### Edge Cases
+
+- What happens when a PDF is very large (hundreds of pages) or a single conversion runs far longer than expected — is it allowed to run to completion, or is it cut off and reported as timed out?
+- What happens when two files with the same name are uploaded by different users?
+- What happens when a user closes the browser page mid-batch, or opens it on a second machine — does the work continue and does the status still show?
+- What happens when a user uploads a file far larger than the page expects, or the upload is interrupted partway?
+- What happens when the storage location fills up mid-batch?
+- What happens when a submitted file is not a PDF at all, or has a PDF extension but different content?
+- What happens when a PDF contains no extractable text and no recognizable page images (e.g., blank scans)?
+- What happens when a PDF's tables span multiple pages, or contain merged and nested cells that have no clean Markdown equivalent?
+- What happens when the stack receives a new document while it is already saturated with concurrent work?
+- What happens when a conversion produces Markdown that is empty or drastically shorter than the source suggests — is it surfaced as suspect rather than reported as success?
+- What happens when the Mac mini loses power mid-conversion, leaving a partially written output file?
+- What happens when a client on the local network requests a document that is still being converted?
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+**Conversion**
+
+- **FR-001**: The system MUST accept PDF documents and produce a Markdown representation of each document's content.
+- **FR-002**: The system MUST preserve document structure in the output, including heading hierarchy, paragraph reading order across multi-column layouts, lists, and tables rendered as Markdown tables.
+- **FR-003**: The system MUST recover text from scanned or image-only pages so that such pages are represented as text in the Markdown output.
+- **FR-004**: The system MUST represent figures and images in the output at their correct position in the document flow, without dropping surrounding text.
+- **FR-005**: The system MUST produce output that is valid Markdown suitable for direct ingestion by AnythingLLM, with no post-processing required by the user.
+- **FR-006**: The system MUST record, for every converted document, the source file identity and the time of conversion so an output file can be traced back to its source PDF.
+- **FR-007**: The system MUST reject unsupported, corrupt, or unreadable inputs with a human-readable failure reason and MUST NOT emit an output file for them.
+- **FR-029**: The system MUST detect a conversion whose Markdown is empty or implausibly small for the source document, and MUST report it distinctly from an ordinary success, so that no one imports an empty document into AnythingLLM believing it converted. The output MUST still be written and retrievable, and a document that is genuinely blank MUST be reportable as blank rather than as a system failure.
+
+**Intake, status, and handoff**
+
+- **FR-008**: Users MUST be able to submit documents through a page opened in a standard web browser from any machine on the local network, with no client software to install.
+- **FR-009**: Users MUST be able to select and submit more than one document at a time from that page.
+- **FR-010**: The page MUST show the current status of each submitted document (queued, in progress, completed, failed, timed out) and update as jobs progress, without the user reloading or re-submitting.
+- **FR-011**: The page MUST show a human-readable reason for every failed document.
+- **FR-012**: Users MUST be able to retrieve the converted Markdown for a completed document directly from that page.
+- **FR-013**: The system MUST write every successfully converted Markdown file to a dedicated output location on the Mac mini, from which an operator imports documents into AnythingLLM manually. Automatic delivery into AnythingLLM is out of scope.
+- **FR-014**: The system MUST name output files predictably and uniquely so that repeated conversions of the same source do not create ambiguous duplicates for the person importing them into AnythingLLM.
+
+**Deployment and operation**
+
+- **FR-015**: The system MUST be deployable as a single container stack definition through Portainer on the Mac mini. Host-side commands MUST be confined to one-time provisioning — preparing the declared storage locations and loading the transferred images. Every subsequent deploy, redeploy, stop, and start MUST be possible from Portainer alone, with no host shell access.
+- **FR-016**: The system MUST restart automatically after a host reboot or a service crash, returning to a working state without operator intervention.
+- **FR-017**: The system MUST retain converted outputs and job history across stack stop, restart, and redeploy.
+- **FR-018**: The system MUST expose health status for each service so Portainer shows an accurate healthy/unhealthy state.
+- **FR-019**: The system MUST emit logs that identify each job, its source document, its outcome, and the reason for any failure, viewable through Portainer.
+- **FR-020**: The system MUST document the storage locations it requires on the Mac mini, their purpose, and their expected growth, so the operator can plan capacity.
+
+**Network isolation**
+
+- **FR-021**: The system MUST operate with no outbound internet access at any point after deployment, including first start, and MUST NOT depend on any runtime download to convert a document.
+- **FR-022**: The system MUST include every model, dictionary, and asset required for conversion — including text recognition and layout analysis — inside the deployed artifacts.
+- **FR-023**: The system MUST only be reachable from the local network, and MUST NOT publish any interface to the internet.
+- **FR-024**: The system MUST treat presence on the local network as sufficient authorization: no user accounts, logins, or shared credentials are required to submit, monitor, or retrieve documents. Access restriction is enforced solely by network reachability per FR-023.
+- **FR-025**: The system MUST render its browser page and serve its content using only assets it hosts itself, so the page works fully for a client that has no internet access.
+- **FR-026**: The system MUST provide the operator with a documented, repeatable way to verify both isolation properties: that the stack makes no internet connections, and that it is unreachable from outside the local network.
+
+**Resource behavior**
+
+- **FR-027**: The system MUST limit how much work it performs at once so that a large batch does not exhaust the Mac mini's memory or make the host unresponsive.
+- **FR-028**: The system MUST fail a conversion that exceeds a documented maximum duration, report it as timed out, and continue processing the remaining documents.
+
+### Key Entities
+
+- **Source Document**: A PDF uploaded for conversion. Attributes: original file name, size, page count, time of upload.
+- **Batch**: A set of documents submitted together in one upload. Attributes: submission time, member documents, aggregate progress.
+- **Conversion Job**: One attempt to convert one source document. Attributes: status (queued, running, completed, failed, timed out), start and end time, failure reason, link to its source document and to its output.
+- **Markdown Output**: The converted result of a successful job. Attributes: file name, storage location, size, creation time, link back to the source document.
+- **Stack Deployment**: The running set of services on the Mac mini. Attributes: service health, storage locations in use, network exposure scope.
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: For a representative set of 20 complex PDFs (multi-column, tabular, and scanned), at least 90% convert successfully on the first attempt without operator intervention.
+- **SC-002**: In a manual review of converted output, at least 95% of headings and at least 90% of tables present in the source documents are correctly represented in the Markdown.
+- **SC-003**: A typical 20-page text-based document completes conversion in under 3 minutes on the Mac mini.
+- **SC-004**: A newly provisioned Mac mini with no internet access can go from an empty Portainer to a healthy, converting stack in under 30 minutes following the provided documentation.
+- **SC-005**: Over a full conversion cycle observed from deployment onward, zero outbound connections leave the local network.
+- **SC-006**: Access attempts from outside the local network fail 100% of the time, verified by a documented, repeatable test.
+- **SC-007**: After a host reboot, the stack is healthy and accepting documents within 5 minutes with no operator action.
+- **SC-008**: A batch of 50 documents runs unattended to completion with every document ending in a definite reported outcome (converted or failed with a reason) and none left in an indeterminate state.
+- **SC-009**: A batch of converted documents taken from the output location and imported into AnythingLLM returns answers citing the correct source document in at least 9 of 10 spot-check questions.
+- **SC-010**: A user on the local network who has never seen the stack before can open its page and get a first document converted in under 5 minutes without written instructions or credentials.
+- **SC-011**: While a batch is running, the Mac mini remains responsive enough that other services on the host, including Portainer, stay usable.
+
+## Assumptions
+
+- Docling is the conversion engine, as named by the user; it is open source and can run fully offline once its models are present locally.
+- The Mac mini is an Apple Silicon machine running a container runtime with Portainer already installed and in use for other stacks; conversion runs on CPU, since GPU acceleration is not available to Linux containers on macOS.
+- AnythingLLM already exists and is operated separately. This feature delivers the conversion stack and the handoff into AnythingLLM; deploying, configuring, or modifying AnythingLLM itself is out of scope.
+- The local network is trusted and privately administered. "Local network only" means reachable from that network's clients and not routable or port-forwarded from the internet. Anyone on that network can therefore upload documents and read every converted document; this is accepted deliberately.
+- Because the stack has no internet access, all models and assets are baked into the deployment artifacts at build time. Building or refreshing those artifacts is performed on a machine that does have internet access, and the resulting artifacts are transferred to the Mac mini out of band.
+- Scanned-page text recognition is limited to English unless additional language assets are explicitly bundled, since language packs cannot be fetched at runtime.
+- Input is limited to PDF. Other formats Docling may support (Office documents, HTML, images) are out of scope for this feature.
+- The stack is sized for a small workgroup — on the order of tens of documents per day, a handful of concurrent users — not for high-volume or multi-tenant use.
+- Source PDFs and converted Markdown may contain sensitive material; both remain on the Mac mini and are never transmitted off the local network.
+- Importing documents into AnythingLLM is a deliberate manual step performed by an operator; the stack makes no connection to AnythingLLM and holds no credentials for it.
+- The browser page is a functional operations page for submitting documents, watching status, and retrieving results. Branding, mobile layouts, and accessibility beyond ordinary browser defaults are out of scope.
+- Job history is kept for operational visibility rather than as a long-term archive; the output location is the durable record.
+- No authoring, editing, or review interface for the converted Markdown is in scope; output is consumed as produced.
+- The project constitution at `.specify/memory/constitution.md` is an unfilled template, so no ratified project principles constrain this specification.
