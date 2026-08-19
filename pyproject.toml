@@ -1,6 +1,6 @@
 [project]
 name = "pdf2md"
-version = "1.1.0"
+version = "1.2.0"
 description = "Offline PDF-to-Markdown web service in front of a docling-serve engine"
 requires-python = ">=3.12"
 dependencies = [
