@@ -239,18 +239,18 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 ### The repository itself
 
 - [X] T096 [US2] Scan the entire git history for secrets before the repository is made public — `git log -p | grep -iE '(api[_-]?key|secret|token|password)\s*[:=]'` and confirm no commit of `deploy/.env.example` ever carried a value (FR-031). A hit means rotating the value, not merely deleting the line — **history is clean**: no secret-shaped assignment in any commit on any branch, and `deploy/.env.example` is the only env file ever committed, with `PDF2MD_ENGINE_API_KEY=` empty in every revision
-- [ ] T097 [US2] Make `github.com/MarRothm/pdf2md` public — it returns 404 unauthenticated today. This is what lets Portainer deploy with the Authentication toggle off and unlocks the free hosted `arm64` runners, which do not work in private repositories (FR-031, research.md R10)
+- [X] T097 [US2] **Done — repository is public.** Make `github.com/MarRothm/pdf2md` public — it returns 404 unauthenticated today. This is what lets Portainer deploy with the Authentication toggle off and unlocks the free hosted `arm64` runners, which do not work in private repositories (FR-031, research.md R10)
 
 ### Build and publish the web image
 
 - [X] T098 [P] [US2] Create `.github/workflows/ci.yml` — `ruff check src tests`, `ruff format --check src tests`, and `pytest` on every push and pull request
 - [X] T099 [P] [US2] Create `.github/workflows/publish.yml` — on `v*` tags only, build `Dockerfile` natively on `ubuntu-24.04-arm` and push `ghcr.io/marrothm/pdf2md-web:<version>` using `GITHUB_TOKEN` with `permissions: packages: write`. No `latest` tag, and no build on ordinary commits (FR-032, research.md R10)
-- [ ] T100 [US2] Tag and push `v1.0.0`, then verify the package pulls with no credential — `docker logout ghcr.io && docker pull ghcr.io/marrothm/pdf2md-web:1.0.0`. A credential prompt means the package was created private; fix its visibility rather than storing a token (research.md O6)
+- [X] T100 [US2] **Done — `ghcr.io/marrothm/pdf2md-web:1.0.0` published and pulls anonymously (O6 resolved: it was created public).** Tag and push `v1.0.0`, then verify the package pulls with no credential — `docker logout ghcr.io && docker pull ghcr.io/marrothm/pdf2md-web:1.0.0`. A credential prompt means the package was created private; fix its visibility rather than storing a token (research.md O6)
 
 ### Stack definition
 
 - [X] T101 [US2] In `deploy/docker-compose.yml`, replace `pull_policy: never` with `pull_policy: missing` on both services (research.md R5)
-- [ ] T102 [US2] **Engine done; web image blocked on T100** — the digest cannot exist before the first publish. In `deploy/docker-compose.yml`, pin both images by tag **and** digest — `ghcr.io/docling-project/docling-serve-cpu:v1.18.0@sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098`, and `ghcr.io/marrothm/pdf2md-web:1.0.0@sha256:<digest printed by T100>` (FR-032, contracts/stack.md)
+- [X] T102 [US2] **Done — both images pinned by digest** (`web` at `sha256:15ca84e9…`, verified `linux/arm64`). In `deploy/docker-compose.yml`, pin both images by tag **and** digest — `ghcr.io/docling-project/docling-serve-cpu:v1.18.0@sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098`, and `ghcr.io/marrothm/pdf2md-web:1.0.0@sha256:<digest printed by T100>` (FR-032, contracts/stack.md)
 - [X] T103 [P] [US2] Add `pyyaml` to the `dev` extra in `pyproject.toml` and write `tests/unit/test_compose_pins.py` — assert every image reference in `deploy/docker-compose.yml` carries an `@sha256:` digest, none is `latest` or a `-slim` variant, and no service sets `pull_policy: never` (FR-030, FR-032)
 - [X] T104 [P] [US2] Update `deploy/.env.example` — `ENGINE_IMAGE` and `WEB_IMAGE` as digest-pinned GHCR references, and replace the air-gap commentary with what the operator now needs to know about pulls
 
@@ -418,11 +418,15 @@ What remains needs decisions or hardware that a repository edit cannot supply:
 
 | Task | Needs |
 |---|---|
-| T097 | Making the GitHub repository public — an outward-facing change, and the gate for the arm64 runners and credential-free deploys |
-| T100 | Pushing `v1.0.0` so the publish workflow runs, then confirming the package pulls anonymously (O6) |
-| T102 | The digest T100 produces, appended to the `web` image reference. The engine is already pinned by digest |
 | T110, T112 | The Mac mini: a Repository-method deploy (O5) and the engine digest check |
 | T111 | The deployed stack, to re-run both isolation scripts |
+
+T097, T100, and T102 closed on 2026-08-19: the repository is public,
+`ghcr.io/marrothm/pdf2md-web:1.0.0` is published and pulls with no credential (which
+resolves open item O6 — the package was created public), and both images are now pinned
+by digest. Two defects surfaced on the way and are fixed in `.github/workflows/publish.yml`:
+`docker/build-push-action` needs a buildx builder to honour `platforms:`, and
+`github.repository_owner` is `MarRothm` while OCI repository names must be lowercase.
 
 Two research open items were resolved from the pinned engine tag rather than left to the
 first deploy: **O1** (the health path is `/ready`, which gates on model loading — `/health`

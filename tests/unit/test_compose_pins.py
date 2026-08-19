@@ -14,9 +14,9 @@ import yaml
 
 COMPOSE_PATH = Path(__file__).resolve().parents[2] / "deploy" / "docker-compose.yml"
 
-# Images whose digest cannot exist yet because they have never been published.
-# Remove an entry as soon as its first publish workflow has run (tasks T100, T102).
-AWAITING_FIRST_PUBLISH = {"ghcr.io/marrothm/pdf2md-web"}
+# Images whose digest cannot exist yet because they have never been published. Empty
+# since v1.0.0 was published — an entry here is a temporary state, not an exemption.
+AWAITING_FIRST_PUBLISH: set[str] = set()
 
 pytestmark = pytest.mark.unit
 

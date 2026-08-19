@@ -16,10 +16,7 @@
 
 services:
   web:
-    # TODO(T102): append `@sha256:<digest>` once the first publish workflow has run —
-    # the digest is printed in that job's summary. Until then this reference is a tag
-    # alone, which tests/unit/test_compose_pins.py reports as awaiting its first publish.
-    image: ${WEB_IMAGE:-ghcr.io/marrothm/pdf2md-web:1.0.0}
+    image: ${WEB_IMAGE:-ghcr.io/marrothm/pdf2md-web:1.0.0@sha256:15ca84e92222199d01e7738cba62f895a9be7439ed50d2bec1a26e9b60ff1436}
     pull_policy: missing
     restart: unless-stopped
     ports:
