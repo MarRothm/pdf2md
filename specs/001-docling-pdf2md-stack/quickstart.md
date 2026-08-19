@@ -2,7 +2,7 @@
 
 **Feature**: `001-docling-pdf2md-stack` | **Plan**: [plan.md](./plan.md)
 
-How to get the stack onto the Mac mini across the air gap, and the runnable checks that prove each spec requirement holds. Design detail lives in [contracts/stack.md](./contracts/stack.md) and [data-model.md](./data-model.md) — this document is the run guide.
+How to get the stack onto the Mac mini from GitHub, and the runnable checks that prove each spec requirement holds. Design detail lives in [contracts/stack.md](./contracts/stack.md) and [data-model.md](./data-model.md) — this document is the run guide.
 
 Replace `10.0.0.19` with the Mac mini's LAN address throughout.
 
@@ -11,64 +11,76 @@ Replace `10.0.0.19` with the Mac mini's LAN address throughout.
 ## Prerequisites
 
 **On the Mac mini**
-- Container runtime with Portainer already in use (measured on the target: OrbStack 29.4.0, `linux/arm64`, 10 CPUs / 8.38 GB to the VM, `portainer/portainer-ee` present)
+- Container runtime with Portainer EE already in use (measured on the target: OrbStack 29.4.0, `linux/arm64`, 10 CPUs / 8.38 GB to the VM, `portainer/portainer-ee` present)
 - An outbox directory created and writable, e.g. `~/pdf2md-outbox`
-- ~8 GB free disk for the loaded images, plus room for the outbox
-- **No internet required**
+- ~8 GB free disk for the pulled images, plus room for the outbox
+- **Internet access for the deploy itself** — Portainer reaches GitHub, the daemon reaches `ghcr.io`. The running stack never uses it (FR-021)
 
-**On a separate connected machine** (same architecture — `linux/arm64`)
-- A container runtime with registry access
-- Somewhere to write a ~5 GB archive, and a way to move it (USB, LAN copy)
+**Nowhere else.** There is no second machine, no archive, and no credential.
 
 ---
 
-## Step 1 — Build and export images (connected machine)
+## Step 1 — Publish the web image (once per version)
+
+Push a release tag; CI builds natively on `arm64` and publishes to GHCR (research.md R10):
 
 ```bash
-./ops/save-images.sh
+git tag v1.0.0 && git push origin v1.0.0
 ```
 
-It must, in order:
-
-1. Pull the pinned `docling-serve-cpu` tag for `linux/arm64` — never `latest`, never a `-slim` variant.
-2. **Verify the models are actually baked in** before going any further:
-   ```bash
-   docker run --rm --entrypoint sh "$ENGINE_IMAGE" \
-     -c 'ls /opt/app-root/src/.cache/docling/models' 
-   ```
-   An empty or missing directory means the image will try to download at first use and will fail on the air-gapped host. Abort the export.
-3. Build `pdf2md-web:<version>` for `linux/arm64`.
-4. `docker save` both images and gzip them.
-5. Print the SHA-256 of each archive for verification after transfer.
-
-**Expected**: two archives (engine ~4.4 GB uncompressed, web ~200 MB) and their checksums.
-
-## Step 2 — Transfer and load (Mac mini)
-
-Move the archives out of band, then:
+Then confirm the package is pullable **without authentication** — from a machine that has never logged in to GHCR:
 
 ```bash
-./ops/load-images.sh /path/to/archives
-docker images | grep -E 'docling-serve-cpu|pdf2md-web'
+docker logout ghcr.io
+docker pull ghcr.io/<owner>/pdf2md-web:1.0.0
+docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/<owner>/pdf2md-web:1.0.0
 ```
 
-**Expected**: both images listed at the exact pinned tags. Checksums verified before loading.
+**Expected**: the pull succeeds anonymously. If it asks for credentials, the package was created private — fix its visibility in the package settings rather than storing a token (FR-031, research.md O6).
 
-## Step 3 — Deploy in Portainer
+Record the printed digest in `deploy/docker-compose.yml`. Both images are pinned as `name:tag@sha256:...`; the tag is for humans and the digest is the actual pin.
 
-1. Portainer → **Stacks** → **Add stack** → paste `deploy/docker-compose.yml`.
-2. Set the environment variables: `PDF2MD_ENGINE_API_KEY` (any long random string), `OUTBOX_HOST_PATH`, `WEB_PORT`.
-3. Leave **"re-pull image" OFF**. With no egress, a pull attempt is a failed deploy.
-4. Deploy.
+## Step 2 — Prepare the Mac mini
 
-**Expected**: both services reach healthy. The engine takes longer on first start because `LOAD_MODELS_AT_BOOT=true` warms the models.
+The only host-side step, and the only shell command in the whole deployment:
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps
+mkdir -p ~/pdf2md-outbox
+```
+
+Create it before deploying. If the bind-mount source is missing at deploy time, Docker creates it root-owned and it cannot be opened in Finder.
+
+## Step 3 — Deploy from GitHub in Portainer
+
+**Stacks → Add stack → Repository**, then:
+
+| Field | Value |
+|---|---|
+| Name | `pdf2md` |
+| Repository URL | this repository's HTTPS URL |
+| Authentication | **off** (public repository) |
+| Repository reference | `refs/heads/main` |
+| Compose path | `deploy/docker-compose.yml` |
+| GitOps updates | **off** — no polling, no webhook (FR-032) |
+| Environment variables | `PDF2MD_ENGINE_API_KEY` (`openssl rand -hex 32`), `OUTBOX_HOST_PATH` (absolute path from step 2) |
+
+Deploy. The first deploy pulls ~4.4 GB of engine plus ~200 MB of web image, then the engine warms its models — `LOAD_MODELS_AT_BOOT=true` — so first start takes minutes. `web` waits on `depends_on: service_healthy` and never comes up against a cold engine.
+
+```bash
 curl -s http://10.0.0.19:8080/api/health | jq
 ```
 
 **Expected**: `"status": "ok"`, `engine.reachable: true`, `outbox.writable: true`.
+
+## Step 4 — Confirm the engine really carries its models
+
+The failure this catches is a stack that deploys, reports healthy, and fails on the first scanned page:
+
+```bash
+./ops/verify-engine-image.sh
+```
+
+**Expected**: the running engine image matches the pinned digest, and `/opt/app-root/src/.cache/docling/models` is populated. A `-slim` variant would fail here (research.md R4).
 
 ---
 
@@ -104,7 +116,9 @@ Upload the same PDF twice, then upload a copy renamed to something else.
 
 **Expected**: outbox filename is `{slug}--{hash12}.md`. The second upload reports **Already converted** and the outbox file count does not increase. The renamed copy also resolves to the same output — identical bytes, identical name — so AnythingLLM never ingests the same content twice under two identities.
 
-### V5 — Offline: zero egress (FR-021, FR-022; SC-005)
+### V5 — Offline: zero egress from the containers (FR-021, FR-022; SC-005)
+
+The host pulled from the internet minutes ago; the point of this check is that the containers cannot, and never could.
 
 ```bash
 ./ops/verify-offline.sh
@@ -185,14 +199,17 @@ uvicorn pdf2md.main:app --reload --port 8080
 
 The test suite runs against a stub `docling-serve` fixture, so no 4.4 GB image is needed to develop the web service. Only V1, V5, V6, V9, and V12 require the real stack.
 
+The same suite runs in CI on every push; the image publish workflow runs only on a `v*` tag, so no ordinary commit changes what could be deployed (research.md R10).
+
 ---
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Check |
 |---|---|---|
-| Deploy fails pulling an image | Portainer's re-pull toggle was left on, or a tag is missing locally | `docker images`; redeploy with the toggle off |
-| Engine unhealthy, log shows a download attempt | The image lacks baked models (a `-slim` variant?) | Step 1's model verification |
+| Deploy fails pulling an image | The GHCR package is private, or the pinned digest does not exist | Pull it by hand with `docker logout ghcr.io` first (step 1); check package visibility before considering a credential |
+| Deploy fails resolving the stack file | Wrong compose path or reference for the Repository method | Compose path is `deploy/docker-compose.yml`, relative to the repository root (contracts/stack.md) |
+| Engine unhealthy, log shows a download attempt | The image lacks baked models (a `-slim` variant?) | Step 4, `ops/verify-engine-image.sh` |
 | Conversions succeed but the page is unreachable from the LAN | Everything landed on `internal` — published ports do not work there | `docker network inspect`; see [research.md](./research.md) R1 |
 | Host becomes sluggish under a batch | Engine memory or thread count too high | Lower `ENG_LOC_NUM_WORKERS`, confirm `SHARE_MODELS=true`, tighten `mem_limit` |
 | A job sits at Converting forever | Watchdog not firing, or the engine timeout is above ours | Both timeout values in [contracts/stack.md](./contracts/stack.md) |

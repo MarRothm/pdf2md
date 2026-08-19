@@ -2,16 +2,32 @@
 
 **Feature**: `001-docling-pdf2md-stack` | **Artifact**: `deploy/docker-compose.yml`
 
-This is the single definition the operator deploys (FR-015). Everything about isolation is expressed here, not in host firewall rules, so a redeploy cannot lose it.
+This is the single definition the operator deploys (FR-015), read by Portainer directly from this repository at `deploy/docker-compose.yml` (FR-030). Everything about isolation is expressed here, not in host firewall rules, so a redeploy cannot lose it.
+
+## Deployment source
+
+| Portainer field | Value |
+|---|---|
+| Build method | **Repository** (not Web editor) |
+| Repository URL | this repository's HTTPS URL |
+| Authentication | **off** — the repository is public (FR-031) |
+| Repository reference | `refs/heads/main` |
+| Compose path | `deploy/docker-compose.yml` |
+| GitOps updates | **off** — no polling, no webhook (FR-032, research.md R5) |
+| Environment variables | `PDF2MD_ENGINE_API_KEY` and `OUTBOX_HOST_PATH` as stack variables; the compose file keeps its `${...}` placeholders |
+
+The compose path is part of this contract. Portainer resolves it inside the cloned repository, so moving the file is a breaking change to every existing deployment.
 
 ## Services
 
 | Service | Image | Networks | Ports | Purpose |
 |---|---|---|---|---|
-| `web` | `pdf2md-web:<version>` (built locally, arm64) | `edge`, `core` | `${WEB_PORT:-8080}:8080` | Page, API, job registry, outbox writes |
-| `docling` | `ghcr.io/docling-project/docling-serve-cpu:<pinned-tag>` | `core` only | none | Conversion engine |
+| `web` | `ghcr.io/<owner>/pdf2md-web:<version>@sha256:<digest>` (built by CI on arm64, research.md R10) | `edge`, `core` | `${WEB_PORT:-8080}:8080` | Page, API, job registry, outbox writes |
+| `docling` | `ghcr.io/docling-project/docling-serve-cpu:<pinned-tag>@sha256:<digest>` (upstream, unmodified) | `core` only | none | Conversion engine |
 
-Both carry `pull_policy: never` and `restart: unless-stopped` (FR-016).
+Both carry `pull_policy: missing` and `restart: unless-stopped` (FR-016).
+
+Both images are pinned by tag **and** digest. The digest is what makes the pin real — a tag can be re-pointed upstream, a digest cannot (FR-032). `pull_policy: missing` then means a redeploy reuses the local image when the digest already matches, so only an intentional version change costs a download.
 
 ## Networks
 
@@ -106,7 +122,8 @@ The exact engine limit is set from measurement during implementation, not guesse
 ## Deployment invariants
 
 1. No service other than `web` publishes a port.
-2. No image tag is `latest`; every tag is pinned and present locally before deploy.
-3. Portainer's "re-pull image" toggle stays **off** — with no egress, a pull attempt is a failed deploy.
-4. The stack file contains no secret values; `PDF2MD_ENGINE_API_KEY` comes from Portainer's stack environment variables.
-5. Changing `networks:` is a change to the security posture of the stack and must be re-verified with `ops/verify-offline.sh` and `ops/verify-lan-only.sh` (FR-026).
+2. No image tag is `latest`; every image is pinned by tag **and** digest (FR-032).
+3. GitOps updates stay **off**. Nothing redeploys this stack but a person (FR-032). "Re-pull image" is an option of the GitOps update mechanism and therefore does not arise.
+4. The stack file contains no secret values; `PDF2MD_ENGINE_API_KEY` comes from Portainer's stack environment variables, and the repository holds no secret at any point in its history (FR-031).
+5. Deployment requires no credential — neither a Git credential in Portainer nor a registry login on the host (FR-031). If a deploy ever asks for one, something is wrong with the repository or package visibility; storing a token is not the fix.
+6. Changing `networks:` is a change to the security posture of the stack and must be re-verified with `ops/verify-offline.sh` and `ops/verify-lan-only.sh` (FR-026).

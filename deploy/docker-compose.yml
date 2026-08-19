@@ -1,15 +1,26 @@
-# The Portainer stack definition (FR-015). Paste this into Portainer → Stacks → Add stack.
+# The Portainer stack definition (FR-015). Portainer reads this file from the repository:
+# Stacks → Add stack → Repository, compose path `deploy/docker-compose.yml` (FR-030).
 #
-# Both images must already be present on the host: this stack never pulls (FR-021).
-# Leave Portainer's "re-pull image" toggle OFF — with no egress, a pull is a failed deploy.
+# Images are pulled from GHCR at deploy time and pinned by tag AND digest — the tag is for
+# humans, the digest is the actual pin, because a tag can be re-pointed upstream (FR-032).
+# `pull_policy: missing` then means a redeploy reuses what is already on the host, so only
+# an intentional version change costs a download.
+#
+# Deploying needs the internet; the running stack does not have it. That distinction is
+# the whole design: see the `networks:` block below (FR-021, research.md R5).
+#
+# GitOps updates stay OFF. Nothing redeploys this stack but a person (FR-032).
 #
 # Networks are the isolation mechanism; see the `networks:` block at the bottom and
 # specs/001-docling-pdf2md-stack/research.md R1 before changing anything there.
 
 services:
   web:
-    image: ${WEB_IMAGE:-pdf2md-web:1.0.0}
-    pull_policy: never
+    # TODO(T102): append `@sha256:<digest>` once the first publish workflow has run —
+    # the digest is printed in that job's summary. Until then this reference is a tag
+    # alone, which tests/unit/test_compose_pins.py reports as awaiting its first publish.
+    image: ${WEB_IMAGE:-ghcr.io/marrothm/pdf2md-web:1.0.0}
+    pull_policy: missing
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8080}:8080"
@@ -63,8 +74,8 @@ services:
   docling:
     # Pinned by tag and digest. Never `latest`; never a `-slim` variant, which ships
     # without model weights and would try to download them on first use.
-    image: ${ENGINE_IMAGE:-ghcr.io/docling-project/docling-serve-cpu:v1.18.0}
-    pull_policy: never
+    image: ${ENGINE_IMAGE:-ghcr.io/docling-project/docling-serve-cpu:v1.18.0@sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098}
+    pull_policy: missing
     restart: unless-stopped
     environment:
       # Models are baked into the image at this path; nothing is ever downloaded (FR-022).

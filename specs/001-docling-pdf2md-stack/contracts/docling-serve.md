@@ -73,4 +73,4 @@ Only `md_content` is requested, so the other content fields come back empty. Tha
 
 ## Version pinning
 
-The engine image is pinned to an exact tag, never `latest`, and the tag is recorded in `deploy/.env`. Upgrading is a deliberate act: pull and verify on a connected machine, re-run the air-gap transfer, redeploy. Any upgrade must re-verify that the artifacts directory in the new image is populated (research.md R4) — `docling-serve-slim` variants, which skip model weights, are incompatible with this deployment.
+The engine image is pinned by exact tag and digest, never `latest`, in `deploy/docker-compose.yml`. Upgrading is a deliberate act, never an automatic one (FR-032): pick the new tag, resolve its `linux/arm64` digest, verify the artifacts directory in the new image is populated (research.md R4), commit the change, and redeploy. `docling-serve-slim` variants, which skip model weights, are incompatible with this deployment. An upgrade also changes layout analysis, so `ops/measure-fidelity.py` is part of accepting one.

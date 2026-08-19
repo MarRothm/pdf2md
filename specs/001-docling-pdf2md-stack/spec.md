@@ -29,15 +29,15 @@ A knowledge worker on the local network has a complex PDF (multi-column layout, 
 
 ### User Story 2 - Operate the stack from Portainer on the Mac mini (Priority: P1)
 
-An operator deploys the conversion stack on the Mac mini by pasting or referencing a single stack definition in Portainer. They can start, stop, redeploy, and inspect logs of the stack entirely from Portainer, and after a Mac mini reboot the stack comes back on its own.
+An operator deploys the conversion stack on the Mac mini by pointing Portainer at the project's GitHub repository, which holds the single stack definition. They can start, stop, redeploy, and inspect logs of the stack entirely from Portainer, and after a Mac mini reboot the stack comes back on its own.
 
 **Why this priority**: The stack has no value if it cannot be deployed and kept alive on the target host by its intended operator. Deployment is a hard requirement stated by the user and is testable independently of conversion quality.
 
-**Independent Test**: Deploy the stack in Portainer on the Mac mini from the provided stack definition without editing files on the host by hand, confirm all services reach a healthy state, restart the Mac mini, and confirm the stack returns to a healthy state unattended.
+**Independent Test**: Deploy the stack in Portainer on the Mac mini from the GitHub repository, without editing files on the host by hand and without supplying any credential, confirm all services reach a healthy state, restart the Mac mini, and confirm the stack returns to a healthy state unattended.
 
 **Acceptance Scenarios**:
 
-1. **Given** Portainer is running on the Mac mini and one-time provisioning is complete, **When** the operator deploys the provided stack definition, **Then** all services start and report a healthy status within 10 minutes on first deploy (model warm-up) and 5 minutes on redeploy, with no further host-side steps.
+1. **Given** Portainer is running on the Mac mini and one-time provisioning is complete, **When** the operator points Portainer at the GitHub repository and deploys, **Then** all services start and report a healthy status within 10 minutes on first deploy (excluding image download time) and 5 minutes on redeploy, with no further host-side steps.
 2. **Given** the stack is running, **When** the operator stops and redeploys it from Portainer, **Then** previously converted Markdown files and job history remain intact.
 3. **Given** the Mac mini is rebooted, **When** the host finishes starting, **Then** the stack returns to a healthy state without operator intervention.
 4. **Given** a conversion service fails or crashes, **When** the operator opens the stack logs in Portainer, **Then** the logs identify which document failed and why, in plain text, without requiring access to the host shell.
@@ -46,16 +46,16 @@ An operator deploys the conversion stack on the Mac mini by pasting or referenci
 
 ### User Story 3 - Guarantee the stack is offline and LAN-only (Priority: P1)
 
-A security-conscious owner must be able to demonstrate that the stack never reaches the internet and cannot be reached from outside the local network, including at first start on a freshly provisioned Mac mini.
+A security-conscious owner must be able to demonstrate that the stack's running services never reach the internet and cannot be reached from outside the local network, including at first start on a freshly provisioned Mac mini. Pulling the deployment from GitHub is the host's business and happens before the stack runs; once running, the stack is sealed.
 
-**Why this priority**: "No internet access" and "local network only" are explicit, non-negotiable constraints from the user. They also constrain the design of every other story, because anything the stack needs at runtime must already be inside it.
+**Why this priority**: "No internet access" and "local network only" are explicit, non-negotiable constraints from the user. They bind the running stack rather than the act of deploying it, which is performed over the internet from GitHub. They still constrain the design of every other story, because anything the stack needs at runtime must already be inside it.
 
-**Independent Test**: With the Mac mini's internet path blocked (or the stack's egress disabled), deploy the stack from scratch and run a full conversion end to end; separately, attempt to reach the stack's interfaces from a host outside the local network and confirm the attempt fails.
+**Independent Test**: Deploy the stack from scratch, then confirm from inside each running container that no internet address is reachable, and run a full conversion end to end; separately, attempt to reach the stack's interfaces from a host outside the local network and confirm the attempt fails.
 
 **Acceptance Scenarios**:
 
-1. **Given** the host has no route to the internet, **When** the stack is deployed and a document is converted, **Then** conversion succeeds with no failures attributable to missing downloads.
-2. **Given** the stack is running normally, **When** its outbound network activity is observed over a full conversion cycle, **Then** no connection attempts leave the local network.
+1. **Given** the stack has been deployed and the host's internet path is then removed, **When** a document is converted, **Then** conversion succeeds with no failures attributable to missing downloads.
+2. **Given** the stack is running normally, **When** the outbound network activity of its containers is observed over a full conversion cycle, **Then** no connection attempts leave the local network.
 3. **Given** a client on the same local network, **When** it opens the stack's interface, **Then** access is granted; **Given** a client outside the local network, **When** it attempts the same, **Then** access is refused.
 4. **Given** all recognition and layout models required for conversion, **When** the stack starts for the first time on a machine that has never run it, **Then** those models are already present inside the deployment and no runtime download is attempted.
 
@@ -110,6 +110,16 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 - What happens when the Mac mini loses power mid-conversion, leaving a partially written output file?
 - What happens when a client on the local network requests a document that is still being converted?
 
+## Clarifications
+
+### Session 2026-08-19
+
+- Q: When you say deployment happens via GitHub, which parts should come from GitHub — the stack definition, the container images, or both? → A: Both — Portainer pulls the stack definition from the GitHub repository, and the container images are pulled from a registry.
+- Q: Once the stack is deployed, should the two running containers still be blocked from reaching the internet entirely? → A: Yes — both containers stay permanently egress-blocked; the host runtime and Portainer may reach GitHub and the registry at any time.
+- Q: Must the conversion models still be baked inside the engine image, or may they be downloaded once during provisioning? → A: Baked in — the pinned engine image ships its own weights; the stack never needs a model source. The host's Ollama is not used: it cannot serve docling's layout, table, and recognition models, and replacing them with a generative vision model would trade extracted content for generated content.
+- Q: Should the GitHub repository and the published web image be public, or private with credentials stored in Portainer? → A: Public repository, public image package — no credentials anywhere in the deployment.
+- Q: Should Portainer redeploy automatically when the GitHub repository changes, or only when an operator triggers it? → A: Manual only — no polling and no webhook; the operator decides when the deployed version changes.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
@@ -137,21 +147,24 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 
 **Deployment and operation**
 
-- **FR-015**: The system MUST be deployable as a single container stack definition through Portainer on the Mac mini. Host-side commands MUST be confined to one-time provisioning — preparing the declared storage locations and loading the transferred images. Every subsequent deploy, redeploy, stop, and start MUST be possible from Portainer alone, with no host shell access.
+- **FR-015**: The system MUST be deployable as a single container stack definition through Portainer on the Mac mini, with the definition pulled by Portainer directly from the project's GitHub repository. Host-side commands MUST be confined to one-time provisioning — preparing the declared storage locations. Every subsequent deploy, redeploy, stop, and start MUST be possible from Portainer alone, with no host shell access and no manual transfer of artifacts to the host.
 - **FR-016**: The system MUST restart automatically after a host reboot or a service crash, returning to a working state without operator intervention.
 - **FR-017**: The system MUST retain converted outputs and job history across stack stop, restart, and redeploy.
 - **FR-018**: The system MUST expose health status for each service so Portainer shows an accurate healthy/unhealthy state.
 - **FR-019**: The system MUST emit logs that identify each job, its source document, its outcome, and the reason for any failure, viewable through Portainer.
 - **FR-020**: The system MUST document the storage locations it requires on the Mac mini, their purpose, and their expected growth, so the operator can plan capacity.
+- **FR-030**: The GitHub repository MUST be the single source of the deployed stack definition, and all container images MUST be obtained from a container registry at deploy time. Deploying, redeploying, or upgrading the stack MUST NOT require copying images or files onto the Mac mini by hand.
+- **FR-031**: Deployment MUST require no credentials: the repository and the published images MUST be publicly readable, so that no token, deploy key, or registry login is stored on the Mac mini or in Portainer, and no expiring credential can break an unattended redeploy. The repository MUST therefore contain no secret at any point in its history.
+- **FR-032**: Redeployment MUST be initiated by an operator. The system MUST NOT poll the repository for changes or accept an inbound trigger to redeploy itself, so that the version performing conversions never changes without someone deciding it should. Image references in the stack definition MUST be pinned to exact versions rather than to a moving tag.
 
 **Network isolation**
 
-- **FR-021**: The system MUST operate with no outbound internet access at any point after deployment, including first start, and MUST NOT depend on any runtime download to convert a document.
-- **FR-022**: The system MUST include every model, dictionary, and asset required for conversion — including text recognition and layout analysis — inside the deployed artifacts.
+- **FR-021**: The stack's running services MUST have no outbound internet access at any point after deployment, including first start, and MUST NOT depend on any runtime download to convert a document. This restriction binds the containers, not the host: the host's container runtime and Portainer MAY reach GitHub and the container registry in order to deploy, redeploy, or upgrade the stack.
+- **FR-022**: The system MUST include every model, dictionary, and asset required for conversion — including text recognition and layout analysis — inside the container images themselves, not in host state populated by a provisioning step. A freshly pulled image on a machine that has never run the stack MUST be able to convert without acquiring anything further.
 - **FR-023**: The system MUST only be reachable from the local network, and MUST NOT publish any interface to the internet.
 - **FR-024**: The system MUST treat presence on the local network as sufficient authorization: no user accounts, logins, or shared credentials are required to submit, monitor, or retrieve documents. Access restriction is enforced solely by network reachability per FR-023.
 - **FR-025**: The system MUST render its browser page and serve its content using only assets it hosts itself, so the page works fully for a client that has no internet access.
-- **FR-026**: The system MUST provide the operator with a documented, repeatable way to verify both isolation properties: that the stack makes no internet connections, and that it is unreachable from outside the local network.
+- **FR-026**: The system MUST provide the operator with a documented, repeatable way to verify both isolation properties: that the stack's running services make no internet connections, and that the stack is unreachable from outside the local network. This verification MUST be part of every deploy that changes the stack's networking.
 
 **Resource behavior**
 
@@ -173,8 +186,8 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 - **SC-001**: For a representative set of 20 complex PDFs (multi-column, tabular, and scanned), at least 90% convert successfully on the first attempt without operator intervention.
 - **SC-002**: In a manual review of converted output, at least 95% of headings and at least 90% of tables present in the source documents are correctly represented in the Markdown.
 - **SC-003**: A typical 20-page text-based document completes conversion in under 3 minutes on the Mac mini.
-- **SC-004**: A newly provisioned Mac mini with no internet access can go from an empty Portainer to a healthy, converting stack in under 30 minutes following the provided documentation.
-- **SC-005**: Over a full conversion cycle observed from deployment onward, zero outbound connections leave the local network.
+- **SC-004**: A newly provisioned Mac mini can go from an empty Portainer to a healthy, converting stack in under 30 minutes by pointing Portainer at the GitHub repository and following the provided documentation, excluding the time spent downloading the images over the operator's connection.
+- **SC-005**: Over a full conversion cycle, zero outbound connections leave the local network from either of the stack's containers. Image and stack-definition retrieval performed by the host during deployment is excluded.
 - **SC-006**: Access attempts from outside the local network fail 100% of the time, verified by a documented, repeatable test.
 - **SC-007**: After a host reboot, the stack is healthy and accepting documents within 5 minutes with no operator action.
 - **SC-008**: A batch of 50 documents runs unattended to completion with every document ending in a definite reported outcome (converted or failed with a reason) and none left in an indeterminate state.
@@ -184,11 +197,12 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 
 ## Assumptions
 
-- Docling is the conversion engine, as named by the user; it is open source and can run fully offline once its models are present locally.
+- Docling is the conversion engine, as named by the user; it is open source and can run fully offline because the published engine image ships its models. Engine image variants that omit the weights are unusable here, whatever their size advantage.
 - The Mac mini is an Apple Silicon machine running a container runtime with Portainer already installed and in use for other stacks; conversion runs on CPU, since GPU acceleration is not available to Linux containers on macOS.
+- An Ollama instance runs on the Mac mini outside containers and is not used by this feature. Docling's layout, table-structure, and text-recognition models are not language models and cannot be served by Ollama; the only thing Ollama could replace is the whole conversion pipeline, with a vision model whose output is generated rather than extracted. That is rejected here because a fabricated table entering AnythingLLM is indistinguishable from a correct one. Ollama-served figure captioning remains possible as a separate, opt-in feature; it is out of scope.
 - AnythingLLM already exists and is operated separately. This feature delivers the conversion stack and the handoff into AnythingLLM; deploying, configuring, or modifying AnythingLLM itself is out of scope.
 - The local network is trusted and privately administered. "Local network only" means reachable from that network's clients and not routable or port-forwarded from the internet. Anyone on that network can therefore upload documents and read every converted document; this is accepted deliberately.
-- Because the stack has no internet access, all models and assets are baked into the deployment artifacts at build time. Building or refreshing those artifacts is performed on a machine that does have internet access, and the resulting artifacts are transferred to the Mac mini out of band.
+- Deployment is performed over the internet from GitHub: Portainer reads the stack definition from the repository and the host's container runtime pulls the images from a registry. The internet restriction applies to the running stack, not to the act of deploying it.
 - Scanned-page text recognition is limited to English unless additional language assets are explicitly bundled, since language packs cannot be fetched at runtime.
 - Input is limited to PDF. Other formats Docling may support (Office documents, HTML, images) are out of scope for this feature.
 - The stack is sized for a small workgroup — on the order of tens of documents per day, a handful of concurrent users — not for high-volume or multi-tenant use.

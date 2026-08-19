@@ -2,12 +2,17 @@
 
 An offline PDF-to-Markdown service for a Mac mini. Someone on the local network opens a
 page, drops in a stack of PDFs, and gets Markdown that AnythingLLM can ingest as it is —
-with no internet involved at any point, including the first start.
+with the running service never reaching the internet, including at first start.
 
 The documents that go through it are not ours to leak. That constraint shapes every
 decision here: the conversion engine sits on a Docker network with no default route, the
 web service's own egress blackholes, and the models are baked into the image rather than
 fetched. Isolation is a property of the stack definition, so a redeploy cannot lose it.
+
+The restriction binds the tool, not the act of deploying it. Portainer reads the stack
+definition from this repository and the host pulls both images from a registry — a
+deployment that needs no credential and no hand-carried archive. From the moment the
+containers start, neither has a route out.
 
 ## The two services
 
@@ -37,8 +42,8 @@ naming, and writing finished Markdown into the outbox folder the operator import
 | Path | What it is |
 |---|---|
 | `src/pdf2md/` | The web service — API, dispatcher, engine client, and the page it serves |
-| `deploy/` | The Portainer stack definition, its variables, the operator's guide, and the deployment checklist |
-| `ops/` | Air-gap transfer, isolation verification, and the fidelity harness |
+| `deploy/` | The Portainer stack definition Portainer reads, its variables, the operator's guide, and the deployment checklist |
+| `ops/` | Image and isolation verification, and the fidelity harness |
 | `tests/` | Unit, contract, and integration tests against a stub engine |
 | `specs/001-docling-pdf2md-stack/` | Why everything is the way it is |
 
@@ -71,7 +76,12 @@ PDF2MD_ENGINE_URL=http://127.0.0.1:5001 \
 
 Only fidelity and isolation need the real thing: conversion quality has to be measured
 against the real engine (`ops/measure-fidelity.py`), and the network properties have to
-be measured against the deployed stack (`ops/verify-offline.sh`, `ops/verify-lan-only.sh`).
+be measured against the deployed stack (`ops/verify-offline.sh`, `ops/verify-lan-only.sh`,
+`ops/verify-engine-image.sh`).
+
+CI runs the same lint and test commands on every push. The web image is built and
+published only on a `v*` tag, natively on an `arm64` runner — no ordinary commit changes
+what could be deployed.
 
 ## Two things worth knowing before changing anything
 

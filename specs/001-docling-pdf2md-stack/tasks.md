@@ -107,15 +107,15 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 
 ### Implementation for User Story 2
 
-- [X] T036 [US2] Write `deploy/docker-compose.yml` — the `web` and `docling` services from [contracts/stack.md](./contracts/stack.md) with pinned image tags, `pull_policy: never`, and `restart: unless-stopped` (FR-016). Networks are added by US3
+- [X] T036 [US2] Write `deploy/docker-compose.yml` — the `web` and `docling` services from [contracts/stack.md](./contracts/stack.md) with pinned image tags, `pull_policy: never`, and `restart: unless-stopped` (FR-016). Networks are added by US3. *(Image references and pull policy revised by T101–T102)*
 - [X] T037 [US2] Declare volumes in `deploy/docker-compose.yml` — named `db` and `inbox` volumes, and the `${OUTBOX_HOST_PATH}` bind mount; the SQLite database must not be on a bind mount (research.md R7)
 - [X] T038 [US2] Set every `docling` environment variable from contracts/stack.md in `deploy/docker-compose.yml` — worker count, `SHARE_MODELS`, timeouts, file and page limits, `DOCLING_DEVICE=cpu`, queue size (FR-027, FR-028)
 - [X] T039 [US2] Add healthchecks and `depends_on: docling: condition: service_healthy` in `deploy/docker-compose.yml` so Portainer reports true health and the page never starts against a cold engine (FR-018). Confirm the engine's health path against `/docs` first (research.md O1)
 - [X] T040 [US2] Implement `GET /api/health` in `src/pdf2md/api/health.py` — engine reachability, backlog counts, outbox writability and free space, database writability
-- [X] T041 [P] [US2] Write `ops/save-images.sh` — pull the pinned engine tag for `linux/arm64`, **verify `/opt/app-root/src/.cache/docling/models` is populated and abort if not**, build the web image, `docker save | gzip` both, print SHA-256 checksums (research.md R4, R5)
-- [X] T042 [P] [US2] Write `ops/load-images.sh` — verify checksums, `docker load` both archives, assert both pinned tags are present locally
+- [X] ~~T041~~ [P] [US2] **SUPERSEDED 2026-08-19 by T105/T106** — the air-gap transfer path no longer exists (research.md R5). Was: write `ops/save-images.sh` — pull the pinned engine tag for `linux/arm64`, **verify `/opt/app-root/src/.cache/docling/models` is populated and abort if not**, build the web image, `docker save | gzip` both, print SHA-256 checksums (research.md R4, R5)
+- [X] ~~T042~~ [P] [US2] **SUPERSEDED 2026-08-19 by T105** — was: write `ops/load-images.sh` — verify checksums, `docker load` both archives, assert both pinned tags are present locally
 - [X] T043 [P] [US2] Write `deploy/.env.example` with every tunable and its chosen default, and no secret values
-- [X] T044 [P] [US2] Write `deploy/README.md` — Portainer deploy and redeploy steps, the "re-pull image toggle stays OFF" warning, and the storage locations with their purpose and expected growth (FR-020)
+- [X] T044 [P] [US2] Write `deploy/README.md` — Portainer deploy and redeploy steps, the "re-pull image toggle stays OFF" warning, and the storage locations with their purpose and expected growth (FR-020). *(Deployment sections rewritten by T107)*
 - [X] T045 [US2] Set `mem_limit` on both services in `deploy/docker-compose.yml` from measured engine RSS at 2 workers with `SHARE_MODELS=true`, leaving headroom for Portainer on the 8.38 GB VM (SC-011, research.md R6)
 
 **Checkpoint**: The stack deploys and redeploys from Portainer alone and survives a reboot
@@ -211,7 +211,7 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 
 - [X] T078 Resolve research open item O1 in `deploy/docker-compose.yml` — confirm the engine's health endpoint path against its `/docs` and correct the healthcheck if `/health` is wrong
 - [X] T079 Resolve research open item O2 — pin the exact verified `docling-serve-cpu` tag in `deploy/.env.example` and `deploy/README.md`, never `latest`, never a `-slim` variant
-- [ ] T080 Resolve research open item O3 — deploy once through the Portainer UI specifically and confirm `pull_policy: never` is honored; record the result and any fallback in `deploy/README.md`
+- [X] ~~T080~~ **OBSOLETE 2026-08-19, replaced by T110** — O3 concerned `pull_policy: never` through the Portainer UI; the stack now pulls from a registry (research.md R5)
 - [X] T081 [P] Review every user-facing `failure_reason` string in `src/pdf2md/docling_client.py` for plain language — no stack traces, no engine jargon (FR-011)
 - [ ] T082 [P] Run the V11 check from [quickstart.md](./quickstart.md) — load the page from a LAN client with its own internet disabled and a fresh profile; confirm the browser network tab shows requests only to the Mac mini (FR-025)
 - [ ] T083 Run the V9 batch of 50 from quickstart.md while watching `docker stats`, and finalize `mem_limit` in `deploy/docker-compose.yml` from the measurement (SC-008, SC-011)
@@ -223,6 +223,55 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 - [X] T086 [P] Write the top-level `README.md` — what the stack is, the two-service architecture, and pointers into `specs/001-docling-pdf2md-stack/`
 - [ ] T087 [P] Verify SC-004 by timing a clean-host deploy from `deploy/README.md` alone (target: under 30 minutes) and correct any missing step in that file
 - [ ] T088 Confirm SC-009 by importing the outbox into AnythingLLM — 10 spot-check questions, at least 9 citing the correct source document, no duplicates from re-converted files; record the result in `deploy/README.md`
+
+---
+
+## Phase 9: User Story 2 (revised) — Deploy from GitHub instead of an air-gapped archive
+
+**Added 2026-08-19** from the clarification that the internet restriction binds the running tool, not the act of deploying it (spec Clarifications; FR-030, FR-031, FR-032; research.md R5, R10).
+
+**Goal**: Portainer deploys the stack straight from this repository with no credential and no hand-carried archive, while the running containers stay exactly as sealed as before.
+
+**Independent Test**: On a host that has never run this stack, point Portainer at the repository, supply two stack variables, and reach a healthy converting stack — without copying a file to the host or entering a credential. Then confirm both isolation scripts still pass.
+
+**⚠️ Nothing in `networks:` changes.** If a task in this phase makes you edit that block, stop — the migration is about delivery, not topology (research.md R1).
+
+### The repository itself
+
+- [X] T096 [US2] Scan the entire git history for secrets before the repository is made public — `git log -p | grep -iE '(api[_-]?key|secret|token|password)\s*[:=]'` and confirm no commit of `deploy/.env.example` ever carried a value (FR-031). A hit means rotating the value, not merely deleting the line — **history is clean**: no secret-shaped assignment in any commit on any branch, and `deploy/.env.example` is the only env file ever committed, with `PDF2MD_ENGINE_API_KEY=` empty in every revision
+- [ ] T097 [US2] Make `github.com/MarRothm/pdf2md` public — it returns 404 unauthenticated today. This is what lets Portainer deploy with the Authentication toggle off and unlocks the free hosted `arm64` runners, which do not work in private repositories (FR-031, research.md R10)
+
+### Build and publish the web image
+
+- [X] T098 [P] [US2] Create `.github/workflows/ci.yml` — `ruff check src tests`, `ruff format --check src tests`, and `pytest` on every push and pull request
+- [X] T099 [P] [US2] Create `.github/workflows/publish.yml` — on `v*` tags only, build `Dockerfile` natively on `ubuntu-24.04-arm` and push `ghcr.io/marrothm/pdf2md-web:<version>` using `GITHUB_TOKEN` with `permissions: packages: write`. No `latest` tag, and no build on ordinary commits (FR-032, research.md R10)
+- [ ] T100 [US2] Tag and push `v1.0.0`, then verify the package pulls with no credential — `docker logout ghcr.io && docker pull ghcr.io/marrothm/pdf2md-web:1.0.0`. A credential prompt means the package was created private; fix its visibility rather than storing a token (research.md O6)
+
+### Stack definition
+
+- [X] T101 [US2] In `deploy/docker-compose.yml`, replace `pull_policy: never` with `pull_policy: missing` on both services (research.md R5)
+- [ ] T102 [US2] **Engine done; web image blocked on T100** — the digest cannot exist before the first publish. In `deploy/docker-compose.yml`, pin both images by tag **and** digest — `ghcr.io/docling-project/docling-serve-cpu:v1.18.0@sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098`, and `ghcr.io/marrothm/pdf2md-web:1.0.0@sha256:<digest printed by T100>` (FR-032, contracts/stack.md)
+- [X] T103 [P] [US2] Add `pyyaml` to the `dev` extra in `pyproject.toml` and write `tests/unit/test_compose_pins.py` — assert every image reference in `deploy/docker-compose.yml` carries an `@sha256:` digest, none is `latest` or a `-slim` variant, and no service sets `pull_policy: never` (FR-030, FR-032)
+- [X] T104 [P] [US2] Update `deploy/.env.example` — `ENGINE_IMAGE` and `WEB_IMAGE` as digest-pinned GHCR references, and replace the air-gap commentary with what the operator now needs to know about pulls
+
+### Ops scripts
+
+- [X] T105 [P] [US2] Delete `ops/save-images.sh` and `ops/load-images.sh` — the transfer path they implement no longer exists, and a fallback nobody exercises is a fallback that fails when reached (research.md R5)
+- [X] T106 [P] [US2] Write `ops/verify-engine-image.sh` — assert the engine image the stack is running matches the pinned digest, and that `/opt/app-root/src/.cache/docling/models` is populated. This is the check `save-images.sh` performed at export time, and it is the only thing standing between a `-slim` variant and a stack that deploys, reports healthy, and fails on the first scanned page (research.md R4)
+
+### Operator documentation
+
+- [X] T107 [US2] Rewrite `deploy/README.md` sections 1–3 and 8–9 — one-time preparation is now the outbox directory alone; deployment is Portainer's **Repository** method with the fields from [contracts/stack.md](./contracts/stack.md); the re-pull toggle warnings and image-transfer instructions go; GitOps updates stay off and the reason why is worth one sentence (FR-030, FR-032)
+- [X] T108 [US2] Rewrite `deploy/PORTAINER-EE-CHECKLIST.md` around the Repository build method — Parts 0–1 collapse to creating the outbox directory, Part 3 selects Repository rather than Web editor, Part 5's toggles become Authentication off and GitOps off, and Part 7 gains the anonymous-pull and engine-digest checks. The file currently documents the retired path end to end
+- [X] T109 [P] [US2] Update the root `README.md` — the `ops/` row no longer describes air-gap transfer, and the deployment sentence points at this repository as the source Portainer reads
+
+### Verification
+
+- [ ] T110 [US2] Resolve research open item O5 — deploy once through Portainer EE's Repository method and confirm the compose path resolves, the stack variables reach the `${...}` placeholders, no credential is requested, and a second redeploy reuses the pulled digests instead of re-downloading 4.4 GB. Record the result in `deploy/README.md`
+- [ ] T111 [US3] Re-run `ops/verify-offline.sh` and `ops/verify-lan-only.sh` against the GitHub-deployed stack — the topology did not change, so both must still pass unchanged. A failure here means the migration altered the security posture (FR-021, FR-026)
+- [ ] T112 [US2] Run `ops/verify-engine-image.sh` on the Mac mini against the pulled engine image, and record the digest match in `deploy/README.md` §10
+
+**Checkpoint**: A clean host reaches a healthy stack from GitHub alone, with no credential and no archive, and both isolation checks still pass.
 
 ---
 
@@ -238,6 +287,7 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 - **US4 (Phase 6)**: Depends on Foundational and on US1's persist step (T027)
 - **US5 (Phase 7)**: Depends on Foundational and on US1's dispatcher (T026, T027)
 - **Polish (Phase 8)**: Depends on the stories you intend to ship
+- **Deployment migration (Phase 9)**: Depends on US2 and US3 being complete (they are). Within the phase: T096→T097 gate everything, T100 produces the digest T102 needs, and T110–T112 need the Mac mini
 
 ### Cross-story file conflicts
 
@@ -245,7 +295,8 @@ Three files are touched by more than one story. Sequence, do not parallelize, th
 
 | File | Touched by |
 |---|---|
-| `deploy/docker-compose.yml` | T036–T039, T045 (US2); T048–T051 (US3) |
+| `deploy/docker-compose.yml` | T036–T039, T045 (US2); T048–T051 (US3); T101–T102 (Phase 9) |
+| `deploy/README.md` | T044, T054 (US2/US3); T107, T110, T112 (Phase 9) |
 | `src/pdf2md/dispatcher.py` | T026, T027, T033, T092 (US1); T058 (US4); T070–T073 (US5) |
 | `src/pdf2md/static/app.js` | T032, T094 (US1); T062 (US4); T075 (US5) |
 | `src/pdf2md/api/jobs.py` | T030, T031 (US1); T060, T065 (US4); T073, T074, T077 (US5) |
@@ -299,6 +350,22 @@ Task: "Write deploy/README.md"                                    # T044
 
 ---
 
+**Phase 9 migration** — the two workflows, the compose test, and the ops scripts touch different files:
+
+```text
+Task: "Create .github/workflows/ci.yml"                           # T098
+Task: "Create .github/workflows/publish.yml"                      # T099
+Task: "Add pyyaml + tests/unit/test_compose_pins.py"              # T103
+Task: "Update deploy/.env.example"                                # T104
+Task: "Delete ops/save-images.sh and ops/load-images.sh"          # T105
+Task: "Write ops/verify-engine-image.sh"                          # T106
+Task: "Update root README.md"                                     # T109
+```
+
+`deploy/README.md` (T107) and `deploy/PORTAINER-EE-CHECKLIST.md` (T108) are separate files and can also run in parallel with the above, but not with each other's content decisions — the checklist is the README's procedure as boxes, so write the README first.
+
+---
+
 ## Implementation Strategy
 
 ### MVP scope
@@ -339,6 +406,24 @@ Everything that can be built and verified without the deployed stack is done: th
 service, the page, the Portainer stack definition, the ops scripts, and 167 unit,
 contract, and integration tests against a stub engine.
 
+**Phase 9 is 11 of 17 done.** The 2026-08-19 clarifications replaced the air-gapped
+delivery path with deployment from GitHub. Everything that can be changed in this
+repository has been: the compose file pins and pull policy, both CI workflows, the
+compose-pinning test, `ops/verify-engine-image.sh`, both operator documents, and the
+removal of the two transfer scripts. None of the web service's own code was affected —
+the containers are as sealed as they ever were, and `ops/verify-offline.sh` and
+`ops/verify-lan-only.sh` are unchanged and still the proof.
+
+What remains needs decisions or hardware that a repository edit cannot supply:
+
+| Task | Needs |
+|---|---|
+| T097 | Making the GitHub repository public — an outward-facing change, and the gate for the arm64 runners and credential-free deploys |
+| T100 | Pushing `v1.0.0` so the publish workflow runs, then confirming the package pulls anonymously (O6) |
+| T102 | The digest T100 produces, appended to the `web` image reference. The engine is already pinned by digest |
+| T110, T112 | The Mac mini: a Repository-method deploy (O5) and the engine digest check |
+| T111 | The deployed stack, to re-run both isolation scripts |
+
 Two research open items were resolved from the pinned engine tag rather than left to the
 first deploy: **O1** (the health path is `/ready`, which gates on model loading — `/health`
 only reports the process is up) and **O2** (`v1.18.0`, arm64 digest recorded in
@@ -350,7 +435,7 @@ deployed — they are measurements and confirmations, not unwritten code:
 
 | Task | Needs |
 |---|---|
-| T080 | A deploy through the Portainer UI, to confirm `pull_policy: never` is honored there (O3) |
+| T100, T110, T112 | The GitHub deployment migration (Phase 9) — a published package, then a Repository-method deploy and the engine digest check |
 | T082 | A LAN client with its own internet disabled, checking the browser network tab (V11) |
 | T083 | `docker stats` during a 50-document batch, to finalize `DOCLING_MEM_LIMIT` (currently a documented starting value of 5g) |
 | T084 | A 20-page PDF converted on the Mac mini, timed (SC-003) |

@@ -1,6 +1,8 @@
 # Phase 0 Research: Offline Docling PDF-to-Markdown Stack
 
-**Feature**: `001-docling-pdf2md-stack` | **Date**: 2026-08-18 | **Plan**: [plan.md](./plan.md)
+**Feature**: `001-docling-pdf2md-stack` | **Date**: 2026-08-18, revised 2026-08-19 | **Plan**: [plan.md](./plan.md)
+
+> **Revised 2026-08-19** after the clarification that deployment happens over the internet from GitHub while the *running stack* stays sealed. R5 is replaced, R4's rationale is rewritten, and R10 is new. R1, R2, R3, R6, R7, R8, and R9 are unaffected — the isolation topology they describe is exactly what still has to hold.
 
 Findings that resolve the unknowns in the plan's Technical Context. Items marked **VALIDATED** were tested on the target host during planning; items marked **VERIFY AT IMPLEMENTATION** are documented decisions that still need a runtime check.
 
@@ -76,26 +78,46 @@ Reimplementing a queue, worker pool, and timeout supervisor around the raw libra
 
 **Decision**: Ship the stock `docling-serve-cpu` image unmodified. Its Containerfile pre-downloads the model set at build time into `DOCLING_SERVE_ARTIFACTS_PATH=/opt/app-root/src/.cache/docling/models` and sets `TESSDATA_PREFIX` for Tesseract data. No derived image, no model volume.
 
-**Rationale**: The models are already inside the published image, which is exactly what FR-022 asks for. Keeping the image stock means air-gap transfer is a plain `docker save`/`docker load` with nothing to reassemble on the far side.
+**Rationale**: The models are already inside the published image, which is exactly what FR-022 asks for — presence of the models is a property of the artifact, so it survives a redeploy, a deleted volume, and a fresh host. Keeping the image stock also means the engine is pulled from its own upstream registry rather than rebuilt or repackaged by us, so there is nothing to keep in sync with an upstream release.
 
 **OCR engine**: Take the image default. Upstream's `docling-tools models download` output shows RapidOCR weights (torch and onnxruntime, English and Chinese) fetched as part of the default set, so scanned-page recognition works offline with no extra assets. EasyOCR language packs are the exception — they are downloaded only on explicit request (`docling-tools models download easyocr --easyocr-lang ...`) and so are unavailable unless baked in. This matches the spec's English-only assumption.
 
-**VERIFY AT IMPLEMENTATION**: confirm the pulled tag actually contains a populated artifacts directory before air-gapping it —
-`docker run --rm --entrypoint sh <image> -c 'ls /opt/app-root/src/.cache/docling/models'`. Upstream has teased `docling-serve-slim` images that *skip* model weights; those must never be used here.
+**VERIFY AT IMPLEMENTATION**: confirm the pinned tag actually contains a populated artifacts directory —
+`docker run --rm --entrypoint sh <image> -c 'ls /opt/app-root/src/.cache/docling/models'`. Upstream has teased `docling-serve-slim` images that *skip* model weights; those must never be used here. This check used to run at export time in `ops/save-images.sh`; with that script retired it moves to `ops/verify-engine-image.sh`, run on the Mac mini against the pulled image (R5).
 
-**Alternatives considered**: mounting a host directory of models populated by `docling-tools models download` on a connected machine. Rejected as redundant given the image already carries them, and it adds a second artifact to keep in sync with the image version.
+**Alternatives considered**:
+
+- *Mounting a host directory of models populated by `docling-tools models download` on a connected machine*: rejected as redundant given the image already carries them, and it adds a second artifact to keep in sync with the image version.
+- *Serving models from the Mac mini's host Ollama instance*: rejected, and worth recording because the hardware argument for it is real — containers on macOS cannot reach Metal, so the engine is CPU-only permanently, while host Ollama is not. It does not work: docling's layout, table-structure, and text-recognition models are not language models and have no Ollama representation. The only thing Ollama could serve is docling's alternative `VlmPipeline`, which replaces the whole extraction cascade with a vision model that *generates* the Markdown. For a corpus destined for retrieval that inverts the failure mode — a cascade that mis-parses a table produces a visibly broken table, while a VLM produces a plausible wrong one that gets cited as fact. Docling's own documentation publishes inference times for that pipeline but no accuracy figures, and its per-page timings (~6s at the fastest) put a 20-page document near SC-003's whole-document budget on inference alone. It would also require giving the engine a route to the host and enabling `DOCLING_SERVE_ENABLE_REMOTE_SERVICES`, which permits any URL, not just the local one. Ollama-served figure captioning remains viable as a separate opt-in feature (spec Assumptions).
 
 ---
 
-## R5. Air-gapped image delivery
+## R5. Deployment delivery: GitHub as the source
 
-**Decision**: Build/pull on a connected machine, `docker save | gzip`, transfer the archive out of band, `docker load` on the Mac mini, and pin the stack to exact tags with `pull_policy: never`.
+**Decision**: Portainer deploys the stack from the GitHub repository using its **Repository** build method — Repository URL, Repository reference `main`, Compose path `deploy/docker-compose.yml`, Authentication toggle **off** — and the host's Docker daemon pulls both images from GHCR. `pull_policy: never` is replaced by `pull_policy: missing`, both images are pinned by tag **and** digest, and **GitOps updates stay off**.
 
-**Rationale**: A Portainer stack normally pulls from a registry; with no egress that fails. `pull_policy: never` makes the stack fail fast and loudly if an image is missing locally, instead of hanging on a pull timeout. Portainer's own "re-pull image" toggle must also stay off at deploy time, since it overrides compose behavior.
+**Rationale**:
 
-**Sizes to plan for**: upstream lists `docling-serve-cpu` at ~4.4 GB for arm64. The custom web image on `python:3.12-slim` is on the order of 200 MB. Both must be transferred; the base image is not present on an air-gapped host either.
+- **The deployed definition is the repository's** (FR-030). Portainer clones the repo at deploy time, so what runs on the Mac mini and what is in version control cannot drift the way a pasted editor buffer can. The compose file is left unmodified by Portainer, which is what allows the environment variables to stay as `${...}` placeholders resolved from stack variables.
+- **No credential anywhere** (FR-031). A public repository needs no Authentication toggle, and a public GHCR package pulls anonymously. Nothing on the Mac mini or in Portainer expires, so no unattended redeploy can fail on a stale token months from now.
+- **Digest pinning, not tag trust** (FR-032). A tag can be re-pointed upstream; `image: name:tag@sha256:...` cannot. This is what makes "pinned to an exact version" a fact about the bytes rather than about a label.
+- **`pull_policy: missing`** is the right partner to digest pinning: the daemon reuses the local image when the digest is already present, so a redeploy does not re-download 4.4 GB, but a fresh host pulls what it needs without hand-loading.
+- **GitOps updates off** (FR-032). Both mechanisms Portainer offers are rejected for different reasons. *Polling* would change the version doing the converting without anyone deciding to, potentially mid-batch, and an engine upgrade quietly changes layout analysis — the kind of change that surfaces as degraded retrieval weeks later, nowhere near the deploy. *Webhook* is worse: GitHub's runners would have to reach Portainer, which means exposing it inbound and contradicting FR-023 directly.
 
-**VALIDATED**: `pull_policy: never` parses and is honored by the compose implementation on this host (29.4.0).
+**What this removes**: `ops/save-images.sh`, `ops/load-images.sh`, the `SHA256SUMS`/`IMAGES` transfer artifacts, and the whole "leave Portainer's re-pull toggle off" caveat — *Re-pull image* is an option of the GitOps update mechanism, so with GitOps off it does not apply at all.
+
+**What it preserves**: the model-population check that `save-images.sh` performed at export time still matters — a slim tag would deploy cleanly, report healthy, and fail on the first scanned page. It moves to `ops/verify-engine-image.sh`, run on the Mac mini against the pulled image, checking both the digest and that the artifacts directory is populated.
+
+**First-deploy cost**: ~4.4 GB engine plus ~200 MB web, pulled once over the operator's connection. SC-004's 30-minute budget explicitly excludes this download.
+
+**Alternatives considered**:
+
+- *Keeping the air-gap transfer as the primary path*: superseded by the clarification. The restriction was always about where documents go, not about how bytes reach the host.
+- *Keeping `save-images.sh`/`load-images.sh` as a documented fallback*: rejected. Two supported paths means two paths to keep correct, and a fallback is exercised only in an emergency — which is exactly when an unexercised path turns out to be broken. Their history remains in git if a genuinely disconnected host ever appears.
+- *`pull_policy: always`*: rejected. With digests pinned it buys nothing, re-downloads on every redeploy, and converts a transient GHCR outage into a failed redeploy of a stack that was working a minute earlier.
+- *Portainer BE relative path volumes*: not needed. The only host path is the outbox, supplied as an absolute path in a stack variable.
+
+**VERIFY AT IMPLEMENTATION**: the first Repository-method deploy through Portainer EE — that the compose path resolves, stack variables are applied to the `${...}` placeholders, no credential prompt appears for the public repo, and a redeploy reuses the already-pulled digests rather than re-downloading.
 
 ---
 
@@ -120,14 +142,14 @@ Reimplementing a queue, worker pool, and timeout supervisor around the raw libra
 
 **Rationale**:
 - Same language as Docling, so the operator debugs one runtime.
-- FR-025 requires the page to work for a client with no internet: no CDN, no web fonts, no external analytics. A no-build-step vanilla page makes that a property of the source tree rather than a bundler configuration to audit. It also means no Node toolchain in the air-gap transfer.
+- FR-025 requires the page to work for a client with no internet: no CDN, no web fonts, no external analytics. A no-build-step vanilla page makes that a property of the source tree rather than a bundler configuration to audit. It also keeps the image build to a single `pip install`, which is what makes a native arm64 CI build cheap (R10).
 - SQLite covers the durable job registry (FR-017) with no additional container.
 
 **Status transport**: the page polls `GET /api/jobs` on a short interval. Server-Sent Events were considered and rejected for v1 — polling at this scale is simpler and reconnects for free, and FR-010 requires only that status updates without user action.
 
 **SQLite placement**: the database lives on a **named Docker volume**, never on a macOS bind mount. SQLite's locking is unreliable across the macOS-to-VM filesystem bridge. The outbox, which the operator needs to reach from Finder for the manual AnythingLLM import, is a bind mount — plain file writes there are safe.
 
-**Alternatives considered**: Postgres (rejected — a third container and a daemon to operate for a single-writer workload of tens of rows per day); a React/Vite frontend (rejected — a build toolchain and node_modules to move across the air gap for one page).
+**Alternatives considered**: Postgres (rejected — a third container and a daemon to operate for a single-writer workload of tens of rows per day); a React/Vite frontend (rejected — a build toolchain and a node_modules tree in the image build for one page).
 
 ---
 
@@ -149,11 +171,29 @@ Reimplementing a queue, worker pool, and timeout supervisor around the raw libra
 
 ---
 
+## R10. Building and publishing the web image
+
+**Decision**: GitHub Actions builds `pdf2md-web` natively on an `ubuntu-24.04-arm` runner and pushes it to `ghcr.io/<owner>/pdf2md-web`, tagged with the release version. The compose file references it by tag and digest. The workflow triggers on a release tag (`v*`), not on every push to `main`.
+
+**Rationale**:
+
+- **Native arm64, not emulation.** GitHub's hosted arm64 runners (`ubuntu-24.04-arm`, `ubuntu-22.04-arm`) are free for public repositories, which makes a native build of an arm64-only image free and fast. Cross-building under QEMU is slow for a pip-install-heavy image and has no upside here. Note that those runner labels **do not work in private repositories** — the public-repository clarification (FR-031) is therefore load-bearing for the build pipeline too, not only for credential handling.
+- **Release-tag trigger, not push-to-main.** FR-032 asks that the deployed version change only when someone decides it should. Publishing an image per commit invites a moving reference and makes "which build is on the Mac mini" a question about timing rather than about a version number.
+- **`GITHUB_TOKEN` with `packages: write`** is the only credential in the pipeline, and it lives in the workflow run rather than on the host.
+
+**Alternatives considered**: `docker buildx` with QEMU on an x86 runner (rejected — slow, and unnecessary now that native runners are free); building on the Mac mini itself (rejected — reintroduces exactly the host-side tooling FR-015 and FR-030 remove); a `latest` tag (rejected — FR-032 requires an exact pin).
+
+**VERIFY AT IMPLEMENTATION**: that the published package is pullable anonymously from a machine that has never authenticated to GHCR, and that the digest recorded in the compose file matches the pushed image.
+
+---
+
 ## Open items carried into implementation
 
 | # | Item | Handling |
 |---|---|---|
 | O1 | Exact health endpoint path on `docling-serve` (assumed `/health`) | **RESOLVED during implementation.** The pinned tag exposes `/health` (process is up, no auth), `/ready` and `/readyz` (503 until the models are loaded), `/livez`, and `/version`. `/ready` is the correct gate: it is what the compose healthcheck and `PDF2MD_ENGINE_HEALTH_PATH` now use, so `web` never starts against a cold engine |
-| O2 | Exact `docling-serve-cpu` tag to pin (README shows `v1.18.0` in examples) | **PINNED to `v1.18.0`** — `linux/arm64` digest `sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098`. Confirmed from the registry that the tag exists for arm64 and that the image sets `DOCLING_SERVE_ARTIFACTS_PATH=/opt/app-root/src/.cache/docling/models` and `TESSDATA_PREFIX`. The models-populated check still runs at export time in `ops/save-images.sh`, which aborts if the directory is empty |
-| O3 | Behavior of `pull_policy: never` through the Portainer UI specifically, as opposed to the compose CLI validated here | Verify during first Portainer deploy; fallback is Portainer's "re-pull image" toggle left off |
+| O2 | Exact `docling-serve-cpu` tag to pin (README shows `v1.18.0` in examples) | **PINNED to `v1.18.0`** — `linux/arm64` digest `sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098`. Confirmed from the registry that the tag exists for arm64 and that the image sets `DOCLING_SERVE_ARTIFACTS_PATH=/opt/app-root/src/.cache/docling/models` and `TESSDATA_PREFIX`. The models-populated check moved to `ops/verify-engine-image.sh`, run against the pulled image (R4, R5) |
+| O3 | ~~Behavior of `pull_policy: never` through the Portainer UI~~ | **OBSOLETE.** Superseded by the GitHub deployment clarification — the stack now pulls from a registry (R5). Replaced by O5 |
+| O5 | First deploy through Portainer EE's **Repository** method | Verify the compose path resolves, stack variables reach the `${...}` placeholders, no credential is requested for the public repo, and a redeploy reuses already-pulled digests (R5) |
+| O6 | GHCR package visibility after the first CI publish | FR-031 requires anonymous pulls. Confirm by pulling from a machine that has never logged in to GHCR; if the package was created private, set it public once in the package settings (R10) |
 | O4 | Whether `partial_success` from the engine should count as converted | **DECIDED: it counts as converted, and is surfaced distinctly.** The job ends `succeeded`, the Markdown is written, and `engine_status=partial_success` travels with the job so the page says parts could not be fully read. FR-029's suspect-yield check is separate: it ends a job `succeeded_suspect` when the output is implausibly small for the source |

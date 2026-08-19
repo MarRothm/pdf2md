@@ -1,49 +1,43 @@
 # Deploying the PDF→Markdown stack on the Mac mini
 
-Two containers, one stack definition, no internet.
+Two containers, one stack definition, deployed from GitHub. The stack itself has no
+internet access — that restriction is about the documents, not about how the software
+gets here.
 
 | Service | What it does |
 |---|---|
 | `web` | The page people open, the job registry, and the writer of the outbox folder |
 | `docling` | The conversion engine. Reachable only from `web`; publishes nothing |
 
-Everything below is done from Portainer, except the one-time preparation in step 1 —
-creating the outbox directory and loading the two images. After that, every deploy,
-redeploy, stop, and start happens in the Portainer UI with no host shell.
+Portainer reads the stack definition straight from this repository, and the host pulls
+both images from GHCR. There is one host-side command in the whole procedure — creating
+the outbox directory — and no credential anywhere.
 
-Deploying it for the first time, or redeploying it? Work through
-[`PORTAINER-EE-CHECKLIST.md`](./PORTAINER-EE-CHECKLIST.md) with this document open
-beside it — the checklist is the same procedure as a set of boxes to tick, including the
-Portainer EE options whose defaults are wrong for an air-gapped host. Read the sections
+Deploying for the first time, or redeploying? Work through
+[`PORTAINER-EE-CHECKLIST.md`](./PORTAINER-EE-CHECKLIST.md) with this document open beside
+it — the checklist is the same procedure as a set of boxes to tick. Read the sections
 below for why any of it is the way it is.
 
 ---
 
 ## 1. One-time preparation (on the Mac mini)
 
-**Create the outbox directory.** This is the folder you will open in Finder and import
-into AnythingLLM from:
+**Create the outbox directory.** This is the folder you open in Finder and import into
+AnythingLLM from:
 
 ```bash
 mkdir -p ~/pdf2md-outbox
 ```
 
-**Load the images.** They are transferred from a connected machine as archives, because
-this host has no registry access:
+Create it *before* deploying. If the bind-mount source is missing at deploy time, Docker
+creates it root-owned and you will not be able to open it in Finder.
 
-```bash
-# on a connected machine, from the repository root
-./ops/save-images.sh            # writes ./dist with both archives and SHA256SUMS
+Note its absolute path — `/Users/you/pdf2md-outbox`, not `~/pdf2md-outbox`. Portainer
+does not expand `~`.
 
-# move ./dist to the Mac mini however you like (USB, LAN copy), then here:
-./ops/load-images.sh /path/to/dist
-```
-
-`save-images.sh` refuses to export an engine image whose model directory is empty. That
-check is the difference between a stack that converts documents offline and one that
-fails on its first conversion trying to download weights.
-
-Expect roughly 2 GB of compressed archives and about 8 GB of disk once loaded.
+That is the entire host-side preparation. There is no archive to copy and no image to
+load: the first deploy pulls ~4.4 GB of engine and ~200 MB of web image from GHCR. Budget
+disk for both, plus room for the outbox.
 
 ---
 
@@ -52,36 +46,47 @@ Expect roughly 2 GB of compressed archives and about 8 GB of disk once loaded.
 Step by step, with every box to tick: [`PORTAINER-EE-CHECKLIST.md`](./PORTAINER-EE-CHECKLIST.md).
 The short version:
 
-1. **Stacks → Add stack**, name it `pdf2md`.
-2. Paste the contents of [`docker-compose.yml`](./docker-compose.yml).
-3. Add the environment variables. The two required ones:
+1. **Stacks → Add stack**, name it `pdf2md`, build method **Repository**.
+2. Fill in the repository fields:
+
+   | Field | Value |
+   |---|---|
+   | Repository URL | `https://github.com/MarRothm/pdf2md` |
+   | Authentication | **off** — the repository is public, so no credential is needed or wanted |
+   | Repository reference | `refs/heads/main` |
+   | Compose path | `deploy/docker-compose.yml` |
+
+3. **Leave GitOps updates OFF.** ⚠️ Neither mechanism is appropriate here. *Polling*
+   would change the version doing the converting without anyone deciding to, possibly
+   mid-batch — and an engine upgrade quietly changes layout analysis, which surfaces as
+   degraded retrieval weeks later, nowhere near the deploy. *Webhook* is worse: GitHub's
+   runners would have to reach Portainer, which means exposing it inbound, and this stack
+   publishes nothing to the internet.
+4. Add the two environment variables. Everything else has a working default; see
+   [`.env.example`](./.env.example) for the full list and the reasoning behind each value.
 
    | Variable | Value |
    |---|---|
    | `PDF2MD_ENGINE_API_KEY` | any long random string — `openssl rand -hex 32` |
    | `OUTBOX_HOST_PATH` | the directory from step 1, e.g. `/Users/you/pdf2md-outbox` |
 
-   Everything else has a working default; see [`.env.example`](./.env.example) for the
-   full list with the reasoning behind each value.
+5. Deploy. The first one pulls the images, then the engine warms its models, so it takes
+   several minutes to report healthy. `web` waits on `depends_on: service_healthy`, so
+   the page does not come up against a cold engine.
 
-4. **Leave the "re-pull image" toggle OFF.** ⚠️ This stack has no internet access. If
-   Portainer tries to re-pull, the deploy fails — it does not fall back to the local
-   image. The compose file sets `pull_policy: never` for the same reason.
-
-5. Deploy.
-
-The engine warms its models at startup, so it takes a few minutes to report healthy on
-the first run. `web` waits for it (`depends_on: service_healthy`), so the page does not
-come up against a cold engine.
-
-**Check it worked:**
+**Check that it worked:**
 
 ```bash
 curl -s http://<mac-mini-ip>:8080/api/health
+./ops/verify-engine-image.sh
 ```
 
 `"status": "ok"` with `engine.reachable: true` and `outbox.writable: true` means the
-stack is ready. Open `http://<mac-mini-ip>:8080` from any machine on the LAN.
+stack is ready. `verify-engine-image.sh` confirms the running engine is the digest this
+repository pins and that its models are baked in — the check that catches an engine
+which deploys cleanly and then fails on the first scanned page.
+
+Open `http://<mac-mini-ip>:8080` from any machine on the LAN.
 
 ---
 
@@ -89,14 +94,18 @@ stack is ready. Open `http://<mac-mini-ip>:8080` from any machine on the LAN.
 
 All from Portainer → Stacks → `pdf2md`:
 
-- **Redeploy** after changing a variable or shipping a new web image: *Editor* → *Update
-  the stack*, with the re-pull toggle still off.
+- **Redeploy** after a change in the repository: *Pull and redeploy*. Because both images
+  are pinned by digest and the compose file sets `pull_policy: missing`, an unchanged
+  version costs no download — only an intentional version bump pulls anything.
 - **Stop / Start** from the stack's controls.
 - Both services carry `restart: unless-stopped`, so they come back on their own after a
-  Mac mini reboot with nothing for you to do (FR-016).
+  Mac mini reboot with nothing from you (FR-016).
 
-Job history and converted documents survive all of this — they live on volumes and in
-the outbox directory, never in the container layers (FR-017).
+Job history and converted documents survive all of it — they live on named volumes and in
+the outbox directory, never in container layers (FR-017).
+
+**Changing the deployed version is a deliberate act.** Edit the pinned digest in
+`deploy/docker-compose.yml`, commit it, and redeploy. Nothing updates itself.
 
 ---
 
@@ -252,25 +261,31 @@ accident.
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
-| Deploy fails trying to pull an image | The re-pull toggle was left on, or a tag is missing locally | `docker images`; re-run `ops/load-images.sh`; redeploy with the toggle off |
-| Engine never reaches healthy | Models missing from the image, or the warm-up is slower than the start period | Engine logs for a download attempt; re-run `ops/save-images.sh`, whose model check would have caught it |
+| Deploy fails trying to pull an image | The GHCR package is private, or the pinned digest does not exist | `docker logout ghcr.io && docker pull <image>`; if it asks for a credential, fix the package's visibility rather than storing a token |
+| Deploy fails resolving the stack file | Wrong compose path or reference on the Repository form | The path is `deploy/docker-compose.yml`, relative to the repository root |
+| Engine never reaches healthy | Models missing from the image, or the warm-up is slower than the start period | `ops/verify-engine-image.sh`; the engine log for a download attempt |
 | Conversions work but the page is unreachable from the LAN | The networks were consolidated onto `internal` — published ports do not work there | `docker network inspect`; see research.md R1 |
 | Host becomes sluggish under a batch | Engine memory or thread count too high | Lower `DOCLING_WORKERS`, keep `SHARE_MODELS` true, tighten `DOCLING_MEM_LIMIT` |
 | A job sits at Converting forever | The watchdog is above the engine's own timeout | `PDF2MD_JOB_TIMEOUT_SECONDS` must stay above `DOCLING_MAX_DOCUMENT_TIMEOUT`, and both must be finite |
 | Database errors after a redeploy | SQLite was moved onto a bind mount | It belongs on the named volume |
+| The stack redeployed on its own | GitOps updates were switched on | Turn them off; the deployed version is meant to change only when a person decides it should |
 
 ---
 
 ## 9. Version pinning, and what has been verified
 
-The engine image is pinned to an exact tag and its `linux/arm64` digest:
+Both images are pinned by tag **and** digest. The tag is for humans; the digest is the
+actual pin, because a tag can be re-pointed upstream and a digest cannot.
 
 ```
 ghcr.io/docling-project/docling-serve-cpu:v1.18.0
-sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098
+  @sha256:6aa1b1428b5c83db2a4fc3431d99902ef115d9e1ce13eed0f716d23ed9d9a098
+
+ghcr.io/marrothm/pdf2md-web:1.0.0
+  built by .github/workflows/publish.yml on a v* tag; digest in that job's summary
 ```
 
-Verified against that tag before deployment:
+Verified against the engine tag before deployment:
 
 | Claim | How it was checked |
 |---|---|
@@ -280,18 +295,16 @@ Verified against that tag before deployment:
 | `/ready` gates on model loading; `/health` only reports the process is up; neither needs the API key | The pinned tag's source |
 | `/v1/convert/file/async`, `/v1/status/poll/{id}`, `/v1/result/{id}` exist, and `X-Api-Key` is the header name | The pinned tag's source |
 
-**Still to verify on the Mac mini itself**, because they cannot be checked from a
-registry — each is a step in the runbook rather than an open question:
+**Still to verify on the Mac mini itself**, because it cannot be checked from a registry:
+that the model directory in the pulled image is actually populated. Run
+`ops/verify-engine-image.sh` after the first deploy. A `-slim` variant fails there, which
+is the point — it would otherwise deploy cleanly, report healthy, and fail on the first
+scanned page.
 
-- The model directory is actually populated. `ops/save-images.sh` checks this at export
-  time and aborts if it is not.
-- `pull_policy: never` behaves through the Portainer UI as it does through the compose
-  CLI. Confirm on the first deploy; the fallback is the re-pull toggle staying off.
-
-**Upgrading the engine is a deliberate act**, never a re-pull: pull and verify on a
-connected machine, re-run the air-gap transfer, redeploy, then re-run
-`ops/measure-fidelity.py`. An upgrade that quietly changes layout analysis shows up
-there and nowhere else.
+**Upgrading the engine is a deliberate act**, never an automatic one: pick the new tag,
+resolve its `linux/arm64` digest, put it in `deploy/docker-compose.yml`, commit, redeploy,
+then re-run `ops/measure-fidelity.py`. An upgrade that quietly changes layout analysis
+shows up there and nowhere else.
 
 ---
 
