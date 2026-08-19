@@ -1,0 +1,57 @@
+# Fidelity corpus manifest.
+#
+# Twenty representative complex PDFs and what a faithful conversion of each must
+# contain. `ops/measure-fidelity.py` converts every document listed here through the
+# deployed stack and scores the Markdown against these expectations, producing the
+# figures SC-001, SC-002, and FR-004 are stated in.
+#
+# The PDFs themselves are NOT in git: they are real documents, often large and often
+# not ours to redistribute. Drop them in this directory next to this file, keeping the
+# names below, then run the harness. See README.md here for how to choose them.
+#
+# Fields per document:
+#   file          filename in this directory
+#   traits        which hard cases it covers: multi_column | tables | scanned |
+#                 figures | rotated | footnotes | forms | mixed_language
+#   pages         page count of the source PDF
+#   headings      how many headings a faithful conversion produces (SC-002: ≥95% found)
+#   tables        how many tables it contains (SC-002: ≥90% rendered as Markdown tables)
+#   figures       how many figures/images it contains (FR-004: present, in position)
+#   must_contain  short strings that must appear in the Markdown — use text that proves
+#                 the hard case worked, e.g. a word only present on a scanned page, or a
+#                 cell from the middle of a table
+#   notes         free text for whoever reads the results
+
+documents:
+  - file: 01-multi-column-report.pdf
+    traits: [multi_column, tables, figures]
+    pages: 24
+    headings: 18
+    tables: 6
+    figures: 4
+    must_contain:
+      - "REPLACE ME: a phrase from the second column of page 2"
+      - "REPLACE ME: a cell from the middle of the largest table"
+    notes: "Two-column annual report — the reading-order case."
+
+  - file: 02-scanned-memo.pdf
+    traits: [scanned]
+    pages: 3
+    headings: 2
+    tables: 0
+    figures: 1
+    must_contain:
+      - "REPLACE ME: a sentence only present on the scanned page"
+    notes: "Image-only pages — the OCR case (FR-003)."
+
+# ... 18 more documents, same shape. The set as a whole must cover, at minimum:
+#   * 5 documents with multi-column layout
+#   * 5 with substantial tables, including one spanning a page break
+#   * 4 scanned or image-only, including one poor-quality scan
+#   * 4 with figures interleaved with text
+#   * 2 pathological: a very large document, and one with rotated or mixed-orientation
+#     pages
+#
+# Pick documents that resemble what this workgroup actually converts. A corpus of clean
+# born-digital reports will pass every gate and tell you nothing about the day the
+# scanner is used.

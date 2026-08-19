@@ -1,0 +1,149 @@
+# The Portainer stack definition (FR-015). Paste this into Portainer → Stacks → Add stack.
+#
+# Both images must already be present on the host: this stack never pulls (FR-021).
+# Leave Portainer's "re-pull image" toggle OFF — with no egress, a pull is a failed deploy.
+#
+# Networks are the isolation mechanism; see the `networks:` block at the bottom and
+# specs/001-docling-pdf2md-stack/research.md R1 before changing anything there.
+
+services:
+  web:
+    image: ${WEB_IMAGE:-pdf2md-web:1.0.0}
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    environment:
+      PDF2MD_ENGINE_URL: http://docling:5001
+      PDF2MD_ENGINE_API_KEY: ${PDF2MD_ENGINE_API_KEY:?set a long random string in the stack variables}
+      PDF2MD_DB_PATH: /data/db/pdf2md.sqlite
+      PDF2MD_INBOX_PATH: /data/inbox
+      PDF2MD_OUTBOX_PATH: /data/outbox
+      PDF2MD_MAX_UPLOAD_BYTES: ${PDF2MD_MAX_UPLOAD_BYTES:-209715200}
+      PDF2MD_JOB_TIMEOUT_SECONDS: ${PDF2MD_JOB_TIMEOUT_SECONDS:-2700}
+      PDF2MD_POLL_INTERVAL_SECONDS: ${PDF2MD_POLL_INTERVAL_SECONDS:-2}
+      PDF2MD_INBOX_RETENTION_HOURS: ${PDF2MD_INBOX_RETENTION_HOURS:-48}
+      PDF2MD_FAILED_INBOX_RETENTION_DAYS: ${PDF2MD_FAILED_INBOX_RETENTION_DAYS:-14}
+      PDF2MD_SUSPECT_MIN_CHARS_PER_PAGE: ${PDF2MD_SUSPECT_MIN_CHARS_PER_PAGE:-50}
+      PDF2MD_JOB_HISTORY_DAYS: ${PDF2MD_JOB_HISTORY_DAYS:-30}
+      PDF2MD_MIN_FREE_BYTES: ${PDF2MD_MIN_FREE_BYTES:-67108864}
+      PDF2MD_ENGINE_WORKERS: ${DOCLING_WORKERS:-2}
+      PDF2MD_LOG_LEVEL: ${PDF2MD_LOG_LEVEL:-INFO}
+    volumes:
+      - db:/data/db
+      - inbox:/data/inbox
+      # The one host-side preparation step: this directory must exist and be writable.
+      - ${OUTBOX_HOST_PATH:?set the outbox directory in the stack variables}:/data/outbox
+    networks:
+      # `edge` carries LAN traffic to the published port; `core` carries the engine call.
+      - edge
+      - core
+    depends_on:
+      docling:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - |
+          import sys, urllib.request
+          sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:8080/healthz", timeout=5).status == 200 else 1)
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    mem_limit: ${WEB_MEM_LIMIT:-512m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  docling:
+    # Pinned by tag and digest. Never `latest`; never a `-slim` variant, which ships
+    # without model weights and would try to download them on first use.
+    image: ${ENGINE_IMAGE:-ghcr.io/docling-project/docling-serve-cpu:v1.18.0}
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      # Models are baked into the image at this path; nothing is ever downloaded (FR-022).
+      DOCLING_SERVE_ARTIFACTS_PATH: /opt/app-root/src/.cache/docling/models
+      # Warm them at startup so the first conversion is not slow (SC-007).
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "true"
+      # No outbound vision-model calls, no third-party plugin fetches (FR-021).
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
+      DOCLING_SERVE_ALLOW_EXTERNAL_PLUGINS: "false"
+      # Upstream's demo UI is not our page, and it sweeps its own result cache.
+      DOCLING_SERVE_ENABLE_UI: "false"
+      # Not a user credential — nobody is ever asked for it. It is insurance against a
+      # one-line mistake publishing the engine's port (FR-024, research.md R9).
+      DOCLING_SERVE_API_KEY: ${PDF2MD_ENGINE_API_KEY:?set a long random string in the stack variables}
+      DOCLING_SERVE_ENG_KIND: local
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: ${DOCLING_WORKERS:-2}
+      # Worker threads share one model set — the main memory lever on the 8.38 GB VM.
+      DOCLING_SERVE_ENG_LOC_SHARE_MODELS: "true"
+      # Per-document ceiling (FR-028), below the web service's own watchdog so the
+      # engine gives up first and the queue keeps moving.
+      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: ${DOCLING_MAX_DOCUMENT_TIMEOUT:-2400}
+      DOCLING_SERVE_MAX_FILE_SIZE: ${PDF2MD_MAX_UPLOAD_BYTES:-209715200}
+      DOCLING_SERVE_MAX_NUM_PAGES: ${DOCLING_MAX_NUM_PAGES:-2000}
+      DOCLING_SERVE_SINGLE_USE_RESULTS: "true"
+      DOCLING_SERVE_QUEUE_MAX_SIZE: ${DOCLING_QUEUE_MAX_SIZE:-100}
+      # No GPU or MPS is reachable from Linux containers on macOS; explicit beats auto.
+      DOCLING_DEVICE: cpu
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-4}
+      DOCLING_SERVE_LOG_LEVEL: ${DOCLING_LOG_LEVEL:-INFO}
+    healthcheck:
+      # /ready — not /health — is the right gate: it answers 503 until the models are
+      # loaded, so `web` does not start against a cold engine (FR-018). Verified against
+      # the pinned tag's source: /health only reports that the process is up, and
+      # neither endpoint requires the API key.
+      test:
+        - CMD
+        - python3
+        - -c
+        - |
+          import sys, urllib.request
+          sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:5001/ready", timeout=10).status == 200 else 1)
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      # Models are warmed at boot, so the first check must not come too early.
+      start_period: 180s
+    networks:
+      # `core` only, and no `ports:` — the engine is not reachable from the LAN at all.
+      - core
+    mem_limit: ${DOCLING_MEM_LIMIT:-5g}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  # This block is the isolation mechanism (FR-021, FR-023), measured on the target host.
+  #
+  #   core  — `internal: true`, so it has no default route at all. The engine sits here
+  #           alone: egress fails immediately with "Network unreachable".
+  #   edge  — a bridge with masquerade disabled. The published port still accepts LAN
+  #           traffic, but the web service's own egress has no SNAT return path and
+  #           blackholes.
+  #
+  # Do not "simplify" this by putting everything on one `internal` network: that was
+  # tested and breaks published ports entirely, so the page becomes unreachable
+  # (research.md R1). Any change here is a change to the security posture of the stack
+  # and must be re-verified with ops/verify-offline.sh and ops/verify-lan-only.sh.
+  edge:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+  core:
+    internal: true
+
+volumes:
+  # SQLite must not live on a macOS bind mount — its locking is unreliable across the
+  # filesystem bridge (research.md R7). The outbox is a bind mount because the operator
+  # opens it in Finder; plain sequential file writes are safe there.
+  db:
+  inbox:

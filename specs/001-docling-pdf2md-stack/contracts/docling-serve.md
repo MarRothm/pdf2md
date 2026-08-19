@@ -11,7 +11,7 @@ Reachable only at `http://docling:5001` on the `core` internal network. Never pu
 | Submit | `POST /v1/convert/file/async` | multipart; `files`, `from_formats=pdf`, `to_formats=md`, `do_ocr=true` |
 | Poll | `GET /v1/status/poll/{task_id}` | returns `task_status`, `task_position` |
 | Fetch | `GET /v1/result/{task_id}` | returns the document payload |
-| Health | `GET /health` | **VERIFY** — confirm the exact path against `/docs` on first run (research.md O1) |
+| Health | `GET /ready` | **RESOLVED (O1)** — verified against the pinned tag's source: `/ready` answers 503 until the models are loaded, `/health` only reports that the process is up, and neither requires the API key. The container healthcheck and our own reachability check both use `/ready`; `/livez` and `/version` also exist. |
 
 All requests carry `X-Api-Key: ${DOCLING_SERVE_API_KEY}` (research.md R9).
 

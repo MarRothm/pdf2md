@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>PDF to Markdown</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header class="bar">
+  <h1>PDF&nbsp;→&nbsp;Markdown</h1>
+  <div id="health" class="health" aria-live="polite">Checking…</div>
+</header>
+
+<main>
+  <section class="panel" aria-labelledby="upload-heading">
+    <h2 id="upload-heading">Add documents</h2>
+    <form id="upload-form">
+      <div id="dropzone" class="dropzone">
+        <label class="picker">
+          <input id="file-input" type="file" accept="application/pdf,.pdf" multiple>
+          <span>Choose PDFs</span>
+        </label>
+        <p class="hint">or drop them here — several at once is fine</p>
+      </div>
+      <label class="note">
+        Note for this batch <span class="optional">(optional)</span>
+        <input id="note-input" type="text" maxlength="200" autocomplete="off">
+      </label>
+      <div class="actions">
+        <button id="submit-button" type="submit" disabled>Convert</button>
+        <span id="selection" class="selection"></span>
+      </div>
+    </form>
+    <ul id="rejections" class="rejections" aria-live="polite"></ul>
+  </section>
+
+  <section class="panel" aria-labelledby="status-heading">
+    <div class="panel-head">
+      <h2 id="status-heading">Documents</h2>
+      <div id="batch-progress" class="progress" aria-live="polite"></div>
+    </div>
+    <table class="jobs">
+      <thead>
+        <tr>
+          <th scope="col">Document</th>
+          <th scope="col">Status</th>
+          <th scope="col">Detail</th>
+          <th scope="col">Markdown</th>
+        </tr>
+      </thead>
+      <tbody id="job-rows"></tbody>
+    </table>
+    <p id="empty" class="empty">Nothing submitted yet.</p>
+  </section>
+</main>
+
+<footer class="foot">
+  <p>Converted files are also written to the outbox folder on this machine for import into
+     AnythingLLM. This page works entirely on the local network — nothing leaves it.</p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
