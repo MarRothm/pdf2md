@@ -61,6 +61,14 @@ class Storage:
     def delete_inbox_file(self, content_hash: str) -> None:
         self.inbox_file(content_hash).unlink(missing_ok=True)
 
+    def part_file(self, content_hash: str, ordinal: int) -> Path:
+        """A page-range PDF cut from an over-long upload (FR-034)."""
+        return self.inbox_path / f"{content_hash}--part{ordinal:03d}.pdf"
+
+    def delete_part_files(self, content_hash: str) -> None:
+        for path in self.inbox_path.glob(f"{content_hash}--part*.pdf"):
+            path.unlink(missing_ok=True)
+
     # --- outbox -----------------------------------------------------------
 
     def outbox_file(self, output_filename: str) -> Path:
@@ -89,6 +97,16 @@ class Storage:
             temp_path.unlink(missing_ok=True)
             raise
         return len(payload)
+
+    def delete_outbox_file(self, output_filename: str) -> None:
+        """Remove a file this service previously wrote.
+
+        The only outbox deletion the service performs, and it is narrow on purpose: a
+        document being re-converted replaces its own section files, because an engine
+        upgrade can detect different headings and would otherwise leave two contradictory
+        versions of the same document for AnythingLLM to cite (research.md R13).
+        """
+        self.outbox_file(output_filename).unlink(missing_ok=True)
 
     # --- probes -----------------------------------------------------------
 

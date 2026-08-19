@@ -17,6 +17,7 @@ from pdf2md.models import (
     JobListResponse,
     JobStatus,
     JobSummary,
+    OutputFile,
     RetryResponse,
     display_status,
 )
@@ -50,7 +51,20 @@ async def list_jobs(
 
 @router.get("/{job_id}", response_model=JobDetail)
 async def get_job(request: Request, job_id: str) -> JobDetail:
-    return to_detail(_require_view(db_of(request), job_id))
+    db = db_of(request)
+    view = _require_view(db, job_id)
+    # What the operator will actually find in the outbox — one file, or one per section
+    # for a document above the threshold (FR-033).
+    outputs = [
+        OutputFile(
+            filename=output.output_filename,
+            bytes=output.bytes,
+            section_title=output.section_title,
+        )
+        for output in db.outputs_for_hash(view.job.content_hash)
+        if output.job_id == view.job.id
+    ]
+    return to_detail(view, outputs)
 
 
 @router.get("/{job_id}/markdown")
@@ -144,7 +158,12 @@ def to_summary(view: JobView) -> JobSummary:
         batch_id=job.batch_id,
         filename=job.submitted_filename,
         status=job.status,
-        display_status=display_status(job.status),
+        display_status=display_status(
+            job.status,
+            part_count=job.part_count,
+            parts_completed=job.parts_completed,
+            missing_page_ranges=job.missing_page_ranges,
+        ),
         queue_position=job.queue_position,
         created_at=job.created_at,
         started_at=job.started_at,
@@ -156,10 +175,13 @@ def to_summary(view: JobView) -> JobSummary:
         output_filename=job.output_filename,
         download_url=f"/api/jobs/{job.id}/markdown" if downloadable else None,
         engine_status=view.engine_status,
+        part_count=job.part_count,
+        parts_completed=job.parts_completed,
+        missing_page_ranges=job.missing_page_ranges,
     )
 
 
-def to_detail(view: JobView) -> JobDetail:
+def to_detail(view: JobView, outputs: list[OutputFile] | None = None) -> JobDetail:
     job = view.job
     return JobDetail(
         **to_summary(view).model_dump(),
@@ -167,6 +189,7 @@ def to_detail(view: JobView) -> JobDetail:
         processing_seconds=_processing_seconds(view),
         output_bytes=view.output_bytes,
         content_hash=job.content_hash,
+        outputs=outputs or [],
     )
 
 

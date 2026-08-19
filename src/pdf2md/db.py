@@ -28,8 +28,10 @@ from pdf2md.models import (
     IN_FLIGHT_STATUSES,
     Backlog,
     ConversionJob,
+    ConversionPart,
     JobStatus,
     MarkdownOutput,
+    PartStatus,
     SourceDocument,
 )
 
@@ -537,6 +539,74 @@ class Database:
             output_filename=output_filename,
         )
 
+    def record_outputs_and_finish(
+        self,
+        *,
+        job_id: str,
+        content_hash: str,
+        outputs: list[tuple[str, int, int | None, str | None]],
+        engine_status: str,
+        status: JobStatus,
+        engine_errors: list[str] | None = None,
+        page_count: int | None = None,
+        missing_page_ranges: list[tuple[int, int]] | None = None,
+        superseded: list[str] | None = None,
+    ) -> None:
+        """Persist every output row and the terminal job state in one transaction.
+
+        A document above the section threshold writes several files (FR-033); an ordinary
+        one writes a single file and is the same code path with a list of one.
+        `superseded` names rows this document wrote on a previous run that the new set
+        does not replace — their files are deleted by the caller (research.md R13).
+        """
+        stamp = now_iso()
+        primary = outputs[0][0] if outputs else None
+        with self.connection() as conn:
+            for name in superseded or []:
+                conn.execute("DELETE FROM markdown_output WHERE output_filename = ?", (name,))
+            for name, size_bytes, ordinal, title in outputs:
+                conn.execute(
+                    "INSERT INTO markdown_output"
+                    " (output_filename, content_hash, job_id, bytes, written_at,"
+                    "  engine_status, section_ordinal, section_title)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(output_filename) DO UPDATE SET"
+                    "   job_id = excluded.job_id, bytes = excluded.bytes,"
+                    "   written_at = excluded.written_at,"
+                    "   engine_status = excluded.engine_status,"
+                    "   section_ordinal = excluded.section_ordinal,"
+                    "   section_title = excluded.section_title",
+                    (name, content_hash, job_id, size_bytes, stamp, engine_status, ordinal, title),
+                )
+            if page_count is not None:
+                conn.execute(
+                    "UPDATE source_document SET page_count = ? WHERE content_hash = ?",
+                    (page_count, content_hash),
+                )
+            conn.execute(
+                "UPDATE conversion_job SET status = ?, ended_at = ?, updated_at = ?,"
+                " output_filename = ?, engine_errors = ?, missing_page_ranges = ?"
+                " WHERE id = ?",
+                (
+                    status.value,
+                    stamp,
+                    stamp,
+                    primary,
+                    json.dumps(engine_errors) if engine_errors else None,
+                    json.dumps(missing_page_ranges) if missing_page_ranges else None,
+                    job_id,
+                ),
+            )
+
+    def outputs_for_hash(self, content_hash: str) -> list[MarkdownOutput]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM markdown_output WHERE content_hash = ?"
+                " ORDER BY COALESCE(section_ordinal, 0), output_filename",
+                (content_hash,),
+            ).fetchall()
+        return [MarkdownOutput(**dict(row)) for row in rows]
+
     def record_output_and_finish(
         self,
         *,
@@ -582,6 +652,94 @@ class Database:
                     job_id,
                 ),
             )
+
+    # --- parts (FR-034) ---------------------------------------------------
+
+    def create_parts(self, job_id: str, ranges: list[tuple[int, int]]) -> list[ConversionPart]:
+        """Record one part per page range and set the job's part count in one step."""
+        stamp = now_iso()
+        with self.connection() as conn:
+            for ordinal, (first_page, last_page) in enumerate(ranges, start=1):
+                conn.execute(
+                    "INSERT INTO conversion_part"
+                    " (id, job_id, ordinal, first_page, last_page, status, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4()), job_id, ordinal, first_page, last_page, "queued", stamp),
+                )
+            conn.execute(
+                "UPDATE conversion_job SET part_count = ?, updated_at = ? WHERE id = ?",
+                (len(ranges), stamp, job_id),
+            )
+        return self.parts_for_job(job_id)
+
+    def parts_for_job(self, job_id: str) -> list[ConversionPart]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM conversion_part WHERE job_id = ? ORDER BY ordinal", (job_id,)
+            ).fetchall()
+        return [ConversionPart(**dict(row)) for row in rows]
+
+    def set_part_path(self, part_id: str, part_path: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE conversion_part SET part_path = ? WHERE id = ?", (part_path, part_id)
+            )
+
+    def mark_part_submitted(self, part_id: str, task_id: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE conversion_part SET status = 'submitted', engine_task_id = ?,"
+                " started_at = COALESCE(started_at, ?) WHERE id = ?",
+                (task_id, now_iso(), part_id),
+            )
+
+    def mark_part_running(self, part_id: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE conversion_part SET status = 'running',"
+                " started_at = COALESCE(started_at, ?) WHERE id = ?",
+                (now_iso(), part_id),
+            )
+
+    def finish_part(
+        self,
+        part_id: str,
+        status: PartStatus,
+        *,
+        markdown: str | None = None,
+        failure_reason: str | None = None,
+    ) -> None:
+        """Commit a part's outcome, and its Markdown, in one transaction.
+
+        For a succeeded part this is the only chance to keep the conversion: the engine
+        serves each result exactly once, so the fetch and this write have to be one step
+        (research.md R3).
+        """
+        stamp = now_iso()
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE conversion_part SET status = ?, markdown = ?, failure_reason = ?,"
+                " ended_at = ? WHERE id = ?",
+                (status.value, markdown, failure_reason, stamp, part_id),
+            )
+            conn.execute(
+                "UPDATE conversion_job SET parts_completed ="
+                " (SELECT COUNT(*) FROM conversion_part"
+                "  WHERE job_id = conversion_job.id AND status IN"
+                "  ('succeeded','failed','timed_out')),"
+                " updated_at = ?"
+                " WHERE id = (SELECT job_id FROM conversion_part WHERE id = ?)",
+                (stamp, part_id),
+            )
+
+    def count_parts_in_flight(self, job_id: str) -> int:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM conversion_part WHERE job_id = ?"
+                " AND status IN ('submitted','running')",
+                (job_id,),
+            ).fetchone()
+        return int(row["n"])
 
     # --- outputs ----------------------------------------------------------
 
@@ -669,6 +827,8 @@ def _row_to_job_data(data: dict[str, Any]) -> ConversionJob:
     fields = {name: data[name] for name in ConversionJob.model_fields if name in data}
     errors = fields.get("engine_errors")
     fields["engine_errors"] = json.loads(errors) if errors else None
+    ranges = fields.get("missing_page_ranges")
+    fields["missing_page_ranges"] = json.loads(ranges) if ranges else None
     return ConversionJob(**fields)
 
 
@@ -676,6 +836,8 @@ def _row_to_job(row: sqlite3.Row) -> ConversionJob:
     data = dict(row)
     errors = data.get("engine_errors")
     data["engine_errors"] = json.loads(errors) if errors else None
+    ranges = data.get("missing_page_ranges")
+    data["missing_page_ranges"] = json.loads(ranges) if ranges else None
     return ConversionJob(**data)
 
 

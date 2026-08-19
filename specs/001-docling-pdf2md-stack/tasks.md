@@ -311,30 +311,30 @@ exactly once (R3, R14).
 
 ### Converting in parts (FR-034, FR-037)
 
-- [ ] T120 [P] [US1] Write `tests/integration/test_split.py` — a document over `PART_MAX_PAGES` produces the expected part count, every part converts, and one document's worth of output results
-- [ ] T121 [US1] Create `ConversionPart` rows and their page-range PDFs when a long document is queued, in `src/pdf2md/dispatcher.py`
-- [ ] T122 [US1] Submit parts respecting `PARTS_IN_FLIGHT` in `src/pdf2md/dispatcher.py`, so one long document cannot starve short ones behind it (research.md R14)
-- [ ] T123 [US1] Poll parts and persist each part's Markdown into its row **in the same transaction as the fetch** in `src/pdf2md/dispatcher.py` — the engine serves a result exactly once, so a part's output must be durable the moment it arrives (research.md R3)
-- [ ] T124 [US1] Join the parts' Markdown in `ordinal` order and write the output once every part is terminal, in `src/pdf2md/dispatcher.py`
+- [X] T120 [P] [US1] Write `tests/integration/test_split.py` — a document over `PART_MAX_PAGES` produces the expected part count, every part converts, and one document's worth of output results
+- [X] T121 [US1] Create `ConversionPart` rows and their page-range PDFs when a long document is queued, in `src/pdf2md/dispatcher.py`
+- [X] T122 [US1] Submit parts respecting `PARTS_IN_FLIGHT` in `src/pdf2md/dispatcher.py`, so one long document cannot starve short ones behind it (research.md R14)
+- [X] T123 [US1] Poll parts and persist each part's Markdown into its row **in the same transaction as the fetch** in `src/pdf2md/dispatcher.py` — the engine serves a result exactly once, so a part's output must be durable the moment it arrives (research.md R3)
+- [X] T124 [US1] Join the parts' Markdown in `ordinal` order and write the output once every part is terminal, in `src/pdf2md/dispatcher.py`
 - [ ] T125 [US1] Change the watchdog in `src/pdf2md/dispatcher.py` from per-document to per-part (research.md R12). **A per-document watchdog terminates every split document** — this is not a tuning change
 - [ ] T126 [P] [US1] Extend `tests/integration/test_timeout.py` — a split document running longer than `JOB_TIMEOUT_SECONDS` in total is not timed out, while a single part exceeding it still is
 
 ### When one part fails (FR-035)
 
-- [ ] T127 [P] [US1] Write a test in `tests/integration/test_split.py` — one failing part yields `succeeded_incomplete`, the missing page range is named, output from the surviving parts is written, and the gap appears **in the Markdown file** as well as on the page
-- [ ] T128 [US1] Implement `succeeded_incomplete`, `missing_page_ranges`, and the in-file gap marker across `src/pdf2md/dispatcher.py`, `src/pdf2md/models.py`, and `src/pdf2md/db.py`
+- [X] T127 [P] [US1] Write a test in `tests/integration/test_split.py` — one failing part yields `succeeded_incomplete`, the missing page range is named, output from the surviving parts is written, and the gap appears **in the Markdown file** as well as on the page
+- [X] T128 [US1] Implement `succeeded_incomplete`, `missing_page_ranges`, and the in-file gap marker across `src/pdf2md/dispatcher.py`, `src/pdf2md/models.py`, and `src/pdf2md/db.py`
 
 ### Section files for the AnythingLLM handoff (FR-033)
 
 - [X] T129 [P] [US4] Write `tests/unit/test_sectioning.py` — splits on the highest heading level actually present (not always `#`); sections below `SECTION_MIN_BYTES` merge; sections above `SECTION_MAX_BYTES` divide; names are deterministic and ordinals preserve reading order
 - [X] T130 [US4] Implement `src/pdf2md/sectioning.py` (research.md R13)
-- [ ] T131 [US4] Write section files and one `MarkdownOutput` row each when the joined Markdown exceeds `SECTION_SPLIT_THRESHOLD_BYTES`, in `src/pdf2md/storage.py` and `src/pdf2md/dispatcher.py`; smaller documents keep producing exactly one file
+- [X] T131 [US4] Write section files and one `MarkdownOutput` row each when the joined Markdown exceeds `SECTION_SPLIT_THRESHOLD_BYTES`, in `src/pdf2md/storage.py` and `src/pdf2md/dispatcher.py`; smaller documents keep producing exactly one file
 - [ ] T132 [US4] Delete the document's own previous section files before writing a new set, in `src/pdf2md/storage.py`, with a test asserting no other document's files are touched. This is the only outbox deletion the service performs and it exists because an engine upgrade can change heading detection (research.md R13)
 
 ### What the page shows (FR-037)
 
-- [ ] T133 [P] [US1] Extend `tests/contract/test_jobs.py` — the list payload carries `part_count`, `parts_completed`, and `missing_page_ranges`; the detail payload carries `outputs[]`
-- [ ] T134 [US1] Add those fields to `src/pdf2md/models.py` and `src/pdf2md/api/jobs.py` per [contracts/web-api.md](./contracts/web-api.md)
+- [X] T133 [P] [US1] Extend `tests/contract/test_jobs.py` — the list payload carries `part_count`, `parts_completed`, and `missing_page_ranges`; the detail payload carries `outputs[]`
+- [X] T134 [US1] Add those fields to `src/pdf2md/models.py` and `src/pdf2md/api/jobs.py` per [contracts/web-api.md](./contracts/web-api.md)
 - [ ] T135 [US1] Render *Converting — part 7 of 20* and *Converted — pages N–M are missing* in `src/pdf2md/static/app.js`, showing the part counter only when `part_count > 1` so ordinary documents look exactly as they do now
 
 ### Restart behaviour (FR-016, User Story 5)

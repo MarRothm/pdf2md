@@ -13,6 +13,7 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     SUCCEEDED_SUSPECT = "succeeded_suspect"
+    SUCCEEDED_INCOMPLETE = "succeeded_incomplete"
     ALREADY_CONVERTED = "already_converted"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
@@ -22,6 +23,7 @@ TERMINAL_STATUSES: frozenset[JobStatus] = frozenset(
     {
         JobStatus.SUCCEEDED,
         JobStatus.SUCCEEDED_SUSPECT,
+        JobStatus.SUCCEEDED_INCOMPLETE,
         JobStatus.ALREADY_CONVERTED,
         JobStatus.FAILED,
         JobStatus.TIMED_OUT,
@@ -35,7 +37,12 @@ IN_FLIGHT_STATUSES: frozenset[JobStatus] = frozenset(
 CONVERTING_STATUSES: frozenset[JobStatus] = frozenset({JobStatus.SUBMITTED, JobStatus.RUNNING})
 
 DOWNLOADABLE_STATUSES: frozenset[JobStatus] = frozenset(
-    {JobStatus.SUCCEEDED, JobStatus.SUCCEEDED_SUSPECT, JobStatus.ALREADY_CONVERTED}
+    {
+        JobStatus.SUCCEEDED,
+        JobStatus.SUCCEEDED_SUSPECT,
+        JobStatus.SUCCEEDED_INCOMPLETE,
+        JobStatus.ALREADY_CONVERTED,
+    }
 )
 
 DISPLAY_STATUS: dict[JobStatus, str] = {
@@ -44,15 +51,36 @@ DISPLAY_STATUS: dict[JobStatus, str] = {
     JobStatus.RUNNING: "Converting",
     JobStatus.SUCCEEDED: "Converted",
     JobStatus.SUCCEEDED_SUSPECT: "Converted — check output",
+    JobStatus.SUCCEEDED_INCOMPLETE: "Converted — some pages are missing",
     JobStatus.ALREADY_CONVERTED: "Already converted",
     JobStatus.FAILED: "Failed",
     JobStatus.TIMED_OUT: "Timed out",
 }
 
 
-def display_status(status: JobStatus | str) -> str:
-    """The user-facing string for a job state, so the page never maps states itself."""
-    return DISPLAY_STATUS[JobStatus(status)]
+def display_status(
+    status: JobStatus | str,
+    *,
+    part_count: int = 1,
+    parts_completed: int = 0,
+    missing_page_ranges: list[list[int]] | None = None,
+) -> str:
+    """The user-facing string for a job state, so the page never maps states itself.
+
+    A split document says which part is running: an hour with no visible movement is
+    indistinguishable from a stall, and the part counter is what makes legitimate slow
+    progress legible (FR-037).
+    """
+    state = JobStatus(status)
+    if state in CONVERTING_STATUSES and part_count > 1:
+        return f"Converting — part {min(parts_completed + 1, part_count)} of {part_count}"
+    if state is JobStatus.SUCCEEDED_INCOMPLETE and missing_page_ranges:
+        ranges = ", ".join(
+            f"{first}" if first == last else f"{first}-{last}"
+            for first, last in missing_page_ranges
+        )
+        return f"Converted — pages {ranges} are missing"
+    return DISPLAY_STATUS[state]
 
 
 class EngineStatus(StrEnum):
@@ -97,6 +125,46 @@ class ConversionJob(BaseModel):
     failure_reason: str | None = None
     engine_errors: list[str] | None = None
     output_filename: str | None = None
+    part_count: int = 1
+    parts_completed: int = 0
+    missing_page_ranges: list[list[int]] | None = None
+
+
+class PartStatus(StrEnum):
+    QUEUED = "queued"
+    SUBMITTED = "submitted"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+
+
+TERMINAL_PART_STATUSES: frozenset[PartStatus] = frozenset(
+    {PartStatus.SUCCEEDED, PartStatus.FAILED, PartStatus.TIMED_OUT}
+)
+
+
+class ConversionPart(BaseModel):
+    """One conversion of one page range — bookkeeping beneath a job (data-model.md).
+
+    The page never shows these; it shows their count. `markdown` is held here rather than
+    in a scratch file because the engine serves each result exactly once, so a part's
+    output has to become durable in the same step that fetches it (research.md R3).
+    """
+
+    id: str
+    job_id: str
+    ordinal: int
+    first_page: int
+    last_page: int
+    part_path: str | None = None
+    status: PartStatus
+    engine_task_id: str | None = None
+    markdown: str | None = None
+    failure_reason: str | None = None
+    created_at: str
+    started_at: str | None = None
+    ended_at: str | None = None
 
 
 class MarkdownOutput(BaseModel):
@@ -106,6 +174,9 @@ class MarkdownOutput(BaseModel):
     bytes: int
     written_at: str
     engine_status: str
+    section_ordinal: int | None = None
+    """A document above the section threshold writes one row per section (FR-033)."""
+    section_title: str | None = None
 
 
 # --- API payloads ---------------------------------------------------------
@@ -152,6 +223,17 @@ class JobSummary(BaseModel):
     download_url: str | None
     engine_status: str | None = None
     """`success` or `partial_success`; the page shows the latter distinctly."""
+    part_count: int = 1
+    """1 for a document converted whole, so the page needs no special case (FR-037)."""
+    parts_completed: int = 0
+    missing_page_ranges: list[list[int]] | None = None
+    """Set only for `succeeded_incomplete`: the ranges whose part failed (FR-035)."""
+
+
+class OutputFile(BaseModel):
+    filename: str
+    bytes: int
+    section_title: str | None = None
 
 
 class JobDetail(JobSummary):
@@ -159,6 +241,8 @@ class JobDetail(JobSummary):
     processing_seconds: float | None = None
     output_bytes: int | None = None
     content_hash: str
+    outputs: list[OutputFile] = []
+    """Every file this document wrote — one, or one per section (FR-033)."""
 
 
 class JobListResponse(BaseModel):
