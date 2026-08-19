@@ -326,8 +326,8 @@ exactly once (R3, R14).
 
 ### Section files for the AnythingLLM handoff (FR-033)
 
-- [ ] T129 [P] [US4] Write `tests/unit/test_sectioning.py` — splits on the highest heading level actually present (not always `#`); sections below `SECTION_MIN_BYTES` merge; sections above `SECTION_MAX_BYTES` divide; names are deterministic and ordinals preserve reading order
-- [ ] T130 [US4] Implement `src/pdf2md/sectioning.py` (research.md R13)
+- [X] T129 [P] [US4] Write `tests/unit/test_sectioning.py` — splits on the highest heading level actually present (not always `#`); sections below `SECTION_MIN_BYTES` merge; sections above `SECTION_MAX_BYTES` divide; names are deterministic and ordinals preserve reading order
+- [X] T130 [US4] Implement `src/pdf2md/sectioning.py` (research.md R13)
 - [ ] T131 [US4] Write section files and one `MarkdownOutput` row each when the joined Markdown exceeds `SECTION_SPLIT_THRESHOLD_BYTES`, in `src/pdf2md/storage.py` and `src/pdf2md/dispatcher.py`; smaller documents keep producing exactly one file
 - [ ] T132 [US4] Delete the document's own previous section files before writing a new set, in `src/pdf2md/storage.py`, with a test asserting no other document's files are touched. This is the only outbox deletion the service performs and it exists because an engine upgrade can change heading detection (research.md R13)
 
