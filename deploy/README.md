@@ -11,6 +11,12 @@ Everything below is done from Portainer, except the one-time preparation in step
 creating the outbox directory and loading the two images. After that, every deploy,
 redeploy, stop, and start happens in the Portainer UI with no host shell.
 
+Deploying it for the first time, or redeploying it? Work through
+[`PORTAINER-EE-CHECKLIST.md`](./PORTAINER-EE-CHECKLIST.md) with this document open
+beside it — the checklist is the same procedure as a set of boxes to tick, including the
+Portainer EE options whose defaults are wrong for an air-gapped host. Read the sections
+below for why any of it is the way it is.
+
 ---
 
 ## 1. One-time preparation (on the Mac mini)
@@ -42,6 +48,9 @@ Expect roughly 2 GB of compressed archives and about 8 GB of disk once loaded.
 ---
 
 ## 2. Deploy in Portainer
+
+Step by step, with every box to tick: [`PORTAINER-EE-CHECKLIST.md`](./PORTAINER-EE-CHECKLIST.md).
+The short version:
 
 1. **Stacks → Add stack**, name it `pdf2md`.
 2. Paste the contents of [`docker-compose.yml`](./docker-compose.yml).

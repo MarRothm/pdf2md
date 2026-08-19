@@ -37,12 +37,14 @@ naming, and writing finished Markdown into the outbox folder the operator import
 | Path | What it is |
 |---|---|
 | `src/pdf2md/` | The web service — API, dispatcher, engine client, and the page it serves |
-| `deploy/` | The Portainer stack definition, its variables, and the operator's guide |
+| `deploy/` | The Portainer stack definition, its variables, the operator's guide, and the deployment checklist |
 | `ops/` | Air-gap transfer, isolation verification, and the fidelity harness |
 | `tests/` | Unit, contract, and integration tests against a stub engine |
 | `specs/001-docling-pdf2md-stack/` | Why everything is the way it is |
 
-Start with [`deploy/README.md`](deploy/README.md) to run it, and
+Start with [`deploy/README.md`](deploy/README.md) to run it —
+[`deploy/PORTAINER-EE-CHECKLIST.md`](deploy/PORTAINER-EE-CHECKLIST.md) is the same thing as a
+step-by-step checklist — and
 [`specs/001-docling-pdf2md-stack/spec.md`](specs/001-docling-pdf2md-stack/spec.md) to
 understand what it is meant to do. The design decisions, including the ones that were
 tried and rejected, are in
