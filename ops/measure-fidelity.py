@@ -57,6 +57,8 @@ class Measurement:
     seconds: float = 0.0
     headings_found: int = 0
     tables_found: int = 0
+    seam_tables: int = 0
+    """Tables apparently divided by a part boundary (SC-013)."""
     figures_found: int = 0
     missing_strings: list[str] = field(default_factory=list)
     failure_reason: str | None = None
@@ -162,6 +164,33 @@ def count_tables(markdown: str) -> int:
     return len(TABLE_DIVIDER.findall(markdown))
 
 
+def count_broken_tables_at_seams(markdown: str) -> int:
+    """Tables that stop and restart across a part boundary (SC-013, research.md R15).
+
+    A part boundary falls on a page number chosen without knowing the document's
+    structure, so a table spanning one is divided between parts and reassembled as two
+    tables with nothing between them. That signature — a divider row beginning a table
+    immediately after another table ended, with no heading or prose in between — is what
+    this counts.
+
+    The design accepted this cost on the arithmetic that 19 seams in a 2000-page document
+    stay inside SC-002's 10% budget for tables. This is the measurement that says whether
+    that held.
+    """
+    broken = 0
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines[1:], start=1):
+        if not TABLE_DIVIDER.match(line):
+            continue
+        # Walk back over the header row to whatever precedes this table.
+        previous = index - 2
+        while previous >= 0 and not lines[previous].strip():
+            previous -= 1
+        if previous >= 0 and lines[previous].lstrip().startswith("|"):
+            broken += 1
+    return broken
+
+
 def count_figures(markdown: str) -> int:
     return len(IMAGE.findall(markdown))
 
@@ -262,6 +291,7 @@ def measure(stack: Stack, expectation: Expectation, deadline: float) -> Measurem
     markdown = stack.markdown(job_id)
     measurement.headings_found = count_headings(markdown)
     measurement.tables_found = count_tables(markdown)
+    measurement.seam_tables = count_broken_tables_at_seams(markdown)
     measurement.figures_found = count_figures(markdown)
     measurement.missing_strings = [
         needle
@@ -273,7 +303,7 @@ def measure(stack: Stack, expectation: Expectation, deadline: float) -> Measurem
     return measurement
 
 
-def report(measurements: list[Measurement]) -> int:
+def report(measurements: list[Measurement], *, show_seams: bool = False) -> int:
     runnable = [m for m in measurements if m.status != "missing_from_corpus"]
     missing = [m for m in measurements if m.status == "missing_from_corpus"]
 
@@ -302,6 +332,7 @@ def report(measurements: list[Measurement]) -> int:
 
     heading_expected = sum(m.expectation.headings for m in converted)
     heading_found = sum(min(m.headings_found, m.expectation.headings) for m in converted)
+    seam_tables = sum(m.seam_tables for m in converted)
     table_expected = sum(m.expectation.tables for m in converted)
     table_found = sum(min(m.tables_found, m.expectation.tables) for m in converted)
     figure_expected = sum(m.expectation.figures for m in converted)
@@ -313,7 +344,10 @@ def report(measurements: list[Measurement]) -> int:
     figure_recall = figure_found / figure_expected if figure_expected else None
 
     print("\n== results ==")
-    print(f"documents measured        {len(runnable)}" + (f" ({len(missing)} missing)" if missing else ""))
+    print(
+        f"documents measured        {len(runnable)}"
+        + (f" ({len(missing)} missing)" if missing else "")
+    )
     gates = [
         _gate("SC-001 first-attempt success", first_attempt, FIRST_ATTEMPT_GATE),
         _gate("SC-002 heading recall", heading_recall, HEADING_RECALL_GATE),
@@ -323,7 +357,16 @@ def report(measurements: list[Measurement]) -> int:
         print(line)
     if figure_recall is not None:
         print(f"FR-004 figures present     {figure_recall:6.1%}")
-    print(f"FR-004 figures in position {len(converted) - len(with_missing)}/{len(converted)} documents clean")
+    if show_seams:
+        # The number that says whether the seam tradeoff in research.md R15 held: a table
+        # divided by a part boundary is reassembled as two tables with nothing between.
+        share = seam_tables / table_found if table_found else 0.0
+        print(
+            f"SC-013 tables broken at a seam  {seam_tables} of {table_found} ({share:.1%})"
+        )
+    print(
+        f"FR-004 figures in position {len(converted) - len(with_missing)}/{len(converted)} documents clean"
+    )
     if with_missing:
         print("\nDocuments with missing expected content:")
         for m in with_missing:
@@ -331,7 +374,10 @@ def report(measurements: list[Measurement]) -> int:
 
     failed_gates = [name for _, name in gates if name]
     if failed_gates or missing:
-        print("\nFAIL — " + "; ".join(failed_gates + ([f"{len(missing)} documents missing"] if missing else [])))
+        print(
+            "\nFAIL — "
+            + "; ".join(failed_gates + ([f"{len(missing)} documents missing"] if missing else []))
+        )
         return 1
     print("\nPASS — every gate met. Record these figures in deploy/README.md.")
     return 0
@@ -357,6 +403,11 @@ def main() -> int:
         help="seconds to wait for one document before giving up",
     )
     parser.add_argument("--only", help="measure a single document by filename")
+    parser.add_argument(
+        "--seams",
+        action="store_true",
+        help="also score tables broken across a part boundary (SC-013)",
+    )
     arguments = parser.parse_args()
 
     if not arguments.manifest.is_file():
@@ -373,7 +424,7 @@ def main() -> int:
     stack = Stack(arguments.base_url)
     print(f"measuring {len(expectations)} documents against {stack.base_url}")
     measurements = [measure(stack, expectation, arguments.deadline) for expectation in expectations]
-    return report(measurements)
+    return report(measurements, show_seams=arguments.seams)
 
 
 if __name__ == "__main__":

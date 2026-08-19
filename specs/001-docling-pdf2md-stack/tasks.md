@@ -345,7 +345,7 @@ exactly once (R3, R14).
 ### Documentation and measurement
 
 - [X] T138 [P] Document the six variables in `deploy/.env.example` and add a splitting section to `deploy/README.md` — what gets split, what gets refused, and that re-conversion replaces a document's section files
-- [ ] T139 [P] Extend `ops/measure-fidelity.py` with `--seams`, scoring tables that span a part boundary separately from tables elsewhere (SC-013)
+- [X] T139 [P] Extend `ops/measure-fidelity.py` with `--seams`, scoring tables that span a part boundary separately from tables elsewhere (SC-013)
 - [ ] T140 Resolve research open item O7 — measure seconds per page across the fidelity corpus and set `PDF2MD_PART_MAX_PAGES` from it; record the figure in `deploy/README.md` §11. The default of 100 is a guess with a safety factor
 - [ ] T141 Resolve research open item O8 — run V17 and confirm seam damage stays inside SC-002's budget; if it does not, the boundary-selection escape hatch in research.md R15 becomes necessary
 - [ ] T142 Run V13–V16 from [quickstart.md](./quickstart.md) against the deployed stack and record the results
