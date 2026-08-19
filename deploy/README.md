@@ -107,6 +107,38 @@ the outbox directory, never in container layers (FR-017).
 **Changing the deployed version is a deliberate act.** Edit the pinned digest in
 `deploy/docker-compose.yml`, commit it, and redeploy. Nothing updates itself.
 
+### Releasing a new version of the web service
+
+Code on `main` is not deployable by itself. The stack pins an image by digest, so a change
+only reaches the Mac mini once it has been built into an image and that image's digest has
+been pinned. Four steps, and it is always **two commits** — the digest cannot be written
+down until the image it names exists.
+
+```bash
+# 1. Bump the version and push it
+sed -i '' 's/^version = ".*"/version = "1.2.0"/' pyproject.toml
+git commit -am "Bump to 1.2.0" && git push
+
+# 2. Tag it — this is what triggers .github/workflows/publish.yml
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+**3.** When the workflow finishes it prints the full image reference in its job summary.
+Confirm it pulls with no credential, which is also how you check the package stayed public:
+
+```bash
+docker logout ghcr.io && docker pull ghcr.io/marrothm/pdf2md-web:1.2.0
+docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/marrothm/pdf2md-web:1.2.0
+```
+
+**4.** Pin that digest in `deploy/docker-compose.yml` and `deploy/.env.example`, commit,
+push — then **Pull and redeploy** in Portainer.
+
+Only the web image moves this way. The engine is upstream and pinned separately; upgrading
+it is a bigger decision because it changes layout analysis (§10).
+
+To see whether anything is waiting for a release: `git log --oneline $(git describe --tags --abbrev=0)..HEAD`
+
 ---
 
 ## 4. Storage: what lives where, and how it grows
