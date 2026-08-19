@@ -124,6 +124,7 @@ table.jobs td.file { word-break: break-word; }
 .state-succeeded { color: var(--ok); }
 .state-already_converted { color: var(--ok); }
 .state-succeeded_suspect { color: var(--warn); }
+.state-succeeded_incomplete { color: var(--warn); }
 .state-failed, .state-timed_out { color: var(--bad); }
 
 .detail { color: var(--muted); }

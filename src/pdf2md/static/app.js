@@ -180,6 +180,8 @@ function renderRow(job) {
 
   const status = document.createElement("td");
   status.className = `state state-${job.status}`;
+  // `display_status` already carries the part counter for a split document (FR-037), so
+  // the page never has to work out how to describe a state itself.
   status.textContent = job.display_status;
   row.append(status);
 
@@ -200,6 +202,17 @@ function renderDetail(job) {
     cell.textContent =
       "The Markdown came out almost empty. Open it before importing — the source may be " +
       "a blank scan, or the text may not have been recognized.";
+  } else if (job.status === "succeeded_incomplete") {
+    // Some pages could not be converted. The file is there and downloadable, but it has a
+    // hole in it and the person importing needs to know which pages (FR-035).
+    cell.classList.add("caution");
+    const ranges = (job.missing_page_ranges || [])
+      .map(([first, last]) => (first === last ? `${first}` : `${first}–${last}`))
+      .join(", ");
+    cell.textContent = ranges
+      ? `Converted, but pages ${ranges} are missing — those pages could not be converted. ` +
+        "The gap is marked in the Markdown too."
+      : "Converted, but some pages are missing from the result.";
   } else if (job.status === "already_converted") {
     // Not new work: this exact document is already in the output folder (FR-014).
     cell.textContent = job.output_filename

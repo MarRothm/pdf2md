@@ -147,6 +147,10 @@ class Dispatcher:
         for job in self.db.in_flight_jobs():
             if self.storage.has_inbox_file(job.content_hash):
                 attempt = job.attempt + 1 if job.status is not JobStatus.QUEUED else job.attempt
+                if job.part_count > 1:
+                    # Only the unfinished parts go back. A part that already converted
+                    # keeps its Markdown rather than being paid for twice.
+                    self.db.requeue_unfinished_parts(job.id)
                 self.db.requeue(job.id, attempt=attempt)
                 log_job(
                     logger,
@@ -697,6 +701,9 @@ class Dispatcher:
         limit = self.settings.job_timeout_seconds
         moment = now()
         for job in self.db.active_jobs():
+            if job.part_count > 1:
+                self._expire_part_timeouts(job, limit, moment)
+                continue
             age = (moment - parse_iso(job.created_at)).total_seconds()
             if age < limit:
                 continue
@@ -711,6 +718,40 @@ class Dispatcher:
                 outcome="timed_out",
                 age_seconds=round(age),
             )
+
+    def _expire_part_timeouts(self, job: ConversionJob, limit: float, moment) -> None:
+        """The watchdog is per part for a split document, and it has to be.
+
+        `JOB_TIMEOUT_SECONDS` is one conversion's allowance. Measured from the job's
+        creation, a twenty-part document cannot finish inside it — the watchdog would
+        terminate every document that splitting exists to rescue, after burning the engine
+        time (research.md R12). A document's effective ceiling is therefore its part count
+        times this limit, and each part is judged on its own clock.
+        """
+        for part in self.db.parts_for_job(job.id):
+            if part.status not in (PartStatus.SUBMITTED, PartStatus.RUNNING):
+                continue
+            started = part.started_at or part.created_at
+            age = (moment - parse_iso(started)).total_seconds()
+            if age < limit:
+                continue
+            self.db.finish_part(
+                part.id,
+                PartStatus.TIMED_OUT,
+                failure_reason=TIMEOUT_REASON_TEMPLATE.format(minutes=round(limit / 60)),
+            )
+            log_job(
+                logger,
+                "part_timed_out",
+                job_id=job.id,
+                filename=job.submitted_filename,
+                level=logging.WARNING,
+                part=part.ordinal,
+                pages=f"{part.first_page}-{part.last_page}",
+                age_seconds=round(age),
+            )
+        if self._all_parts_terminal(job.id):
+            self.finish_split_job(job)
 
     def run_maintenance(self, force: bool = False) -> None:
         """Reap spent uploads and prune old history, at most every few minutes."""

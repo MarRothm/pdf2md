@@ -2,6 +2,7 @@
 
 import pytest
 
+from pdf2md.clock import iso_ago
 from tests.conftest import pdf_bytes
 from tests.stubs.docling_stub import TaskBehavior
 
@@ -82,3 +83,51 @@ async def test_a_document_waiting_in_the_queue_is_not_timed_out(
     dispatcher.expire_timeouts()  # no submission pass, so nothing new starts
     assert len(db.list_jobs(statuses=["timed_out"], limit=50)) == settings.max_in_flight
     assert db.backlog().queued == 6 - settings.max_in_flight
+
+
+async def test_a_split_document_is_not_timed_out_for_taking_longer_than_one_part(
+    upload, client, dispatcher, stub_engine, settings, db
+):
+    """The watchdog is one conversion's allowance, and a split document is many.
+
+    Measured from the job's creation it would terminate every document that splitting
+    exists to rescue — after burning the engine time (research.md R12).
+    """
+    settings.part_max_pages = 10
+    settings.job_timeout_seconds = 60
+    stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
+
+    body = (await upload(("long.pdf", pdf_bytes(b"slow", pages=40)))).json()
+    job_id = body["accepted"][0]["job_id"]
+    await dispatcher.run_once()
+
+    # The job was created long enough ago to trip a per-document watchdog.
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE conversion_job SET created_at = ? WHERE id = ?", (iso_ago(hours=1), job_id)
+        )
+
+    await dispatcher.drain()
+    assert (await client.get(f"/api/jobs/{job_id}")).json()["status"] == "succeeded"
+
+
+async def test_a_part_that_overruns_is_timed_out_on_its_own_clock(
+    upload, client, dispatcher, stub_engine, settings, db
+):
+    settings.part_max_pages = 10
+    settings.job_timeout_seconds = 60
+    stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
+    stub_engine.set_behavior("stuck.pdf (pages 1-10)", TaskBehavior(never_finishes=True))
+
+    body = (await upload(("stuck.pdf", pdf_bytes(b"stuck", pages=25)))).json()
+    job_id = body["accepted"][0]["job_id"]
+    await dispatcher.run_once()
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE conversion_part SET started_at = ? WHERE ordinal = 1", (iso_ago(hours=1),)
+        )
+
+    await dispatcher.drain()
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    assert detail["status"] == "succeeded_incomplete"
+    assert detail["missing_page_ranges"] == [[1, 10]]

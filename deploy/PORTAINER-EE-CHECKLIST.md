@@ -177,7 +177,7 @@ so anything configured outside it is not part of the deployment.
 ## Part 8 — Record what you measured
 
 The stack is deployed; the numbers it was deployed under are still unknown. Fill in the
-table in [`README.md` §10](./README.md) so the next person inherits measurements rather
+table in [`README.md` §11](./README.md) so the next person inherits measurements rather
 than assumptions:
 
 - [ ] Engine memory under a 50-document batch (`docker stats`) — this is what sets the
@@ -231,5 +231,5 @@ Job history and converted documents survive a redeploy — they live on the `db`
 | Database errors after redeploy | SQLite moved onto a bind mount | It belongs on a named volume (research.md R7) |
 | The stack redeployed by itself | GitOps updates were switched on | Turn them off (Part 5) |
 
-Fuller versions of all of these are in [`README.md` §8](./README.md) and
+Fuller versions of all of these are in [`README.md` §9](./README.md) and
 [`../specs/001-docling-pdf2md-stack/quickstart.md`](../specs/001-docling-pdf2md-stack/quickstart.md).

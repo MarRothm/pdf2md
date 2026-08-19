@@ -269,7 +269,7 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 
 - [ ] T110 [US2] Resolve research open item O5 — deploy once through Portainer EE's Repository method and confirm the compose path resolves, the stack variables reach the `${...}` placeholders, no credential is requested, and a second redeploy reuses the pulled digests instead of re-downloading 4.4 GB. Record the result in `deploy/README.md`
 - [ ] T111 [US3] Re-run `ops/verify-offline.sh` and `ops/verify-lan-only.sh` against the GitHub-deployed stack — the topology did not change, so both must still pass unchanged. A failure here means the migration altered the security posture (FR-021, FR-026)
-- [ ] T112 [US2] Run `ops/verify-engine-image.sh` on the Mac mini against the pulled engine image, and record the digest match in `deploy/README.md` §10
+- [ ] T112 [US2] Run `ops/verify-engine-image.sh` on the Mac mini against the pulled engine image, and record the digest match in `deploy/README.md` §11
 
 **Checkpoint**: A clean host reaches a healthy stack from GitHub alone, with no credential and no archive, and both isolation checks still pass.
 
@@ -316,8 +316,8 @@ exactly once (R3, R14).
 - [X] T122 [US1] Submit parts respecting `PARTS_IN_FLIGHT` in `src/pdf2md/dispatcher.py`, so one long document cannot starve short ones behind it (research.md R14)
 - [X] T123 [US1] Poll parts and persist each part's Markdown into its row **in the same transaction as the fetch** in `src/pdf2md/dispatcher.py` — the engine serves a result exactly once, so a part's output must be durable the moment it arrives (research.md R3)
 - [X] T124 [US1] Join the parts' Markdown in `ordinal` order and write the output once every part is terminal, in `src/pdf2md/dispatcher.py`
-- [ ] T125 [US1] Change the watchdog in `src/pdf2md/dispatcher.py` from per-document to per-part (research.md R12). **A per-document watchdog terminates every split document** — this is not a tuning change
-- [ ] T126 [P] [US1] Extend `tests/integration/test_timeout.py` — a split document running longer than `JOB_TIMEOUT_SECONDS` in total is not timed out, while a single part exceeding it still is
+- [X] T125 [US1] Change the watchdog in `src/pdf2md/dispatcher.py` from per-document to per-part (research.md R12). **A per-document watchdog terminates every split document** — this is not a tuning change
+- [X] T126 [P] [US1] Extend `tests/integration/test_timeout.py` — a split document running longer than `JOB_TIMEOUT_SECONDS` in total is not timed out, while a single part exceeding it still is
 
 ### When one part fails (FR-035)
 
@@ -329,24 +329,24 @@ exactly once (R3, R14).
 - [X] T129 [P] [US4] Write `tests/unit/test_sectioning.py` — splits on the highest heading level actually present (not always `#`); sections below `SECTION_MIN_BYTES` merge; sections above `SECTION_MAX_BYTES` divide; names are deterministic and ordinals preserve reading order
 - [X] T130 [US4] Implement `src/pdf2md/sectioning.py` (research.md R13)
 - [X] T131 [US4] Write section files and one `MarkdownOutput` row each when the joined Markdown exceeds `SECTION_SPLIT_THRESHOLD_BYTES`, in `src/pdf2md/storage.py` and `src/pdf2md/dispatcher.py`; smaller documents keep producing exactly one file
-- [ ] T132 [US4] Delete the document's own previous section files before writing a new set, in `src/pdf2md/storage.py`, with a test asserting no other document's files are touched. This is the only outbox deletion the service performs and it exists because an engine upgrade can change heading detection (research.md R13)
+- [X] T132 [US4] Delete the document's own previous section files before writing a new set, in `src/pdf2md/storage.py`, with a test asserting no other document's files are touched. This is the only outbox deletion the service performs and it exists because an engine upgrade can change heading detection (research.md R13)
 
 ### What the page shows (FR-037)
 
 - [X] T133 [P] [US1] Extend `tests/contract/test_jobs.py` — the list payload carries `part_count`, `parts_completed`, and `missing_page_ranges`; the detail payload carries `outputs[]`
 - [X] T134 [US1] Add those fields to `src/pdf2md/models.py` and `src/pdf2md/api/jobs.py` per [contracts/web-api.md](./contracts/web-api.md)
-- [ ] T135 [US1] Render *Converting — part 7 of 20* and *Converted — pages N–M are missing* in `src/pdf2md/static/app.js`, showing the part counter only when `part_count > 1` so ordinary documents look exactly as they do now
+- [X] T135 [US1] Render *Converting — part 7 of 20* and *Converted — pages N–M are missing* in `src/pdf2md/static/app.js`, showing the part counter only when `part_count > 1` so ordinary documents look exactly as they do now
 
 ### Restart behaviour (FR-016, User Story 5)
 
-- [ ] T136 [P] [US5] Extend `tests/integration/test_restart_recovery.py` — a restart mid-split resubmits only the unfinished parts, and a part whose source PDF is gone fails the document while naming the page range
-- [ ] T137 [US5] Implement part-aware restart recovery in `src/pdf2md/dispatcher.py`
+- [X] T136 [P] [US5] Extend `tests/integration/test_restart_recovery.py` — a restart mid-split resubmits only the unfinished parts, and a part whose source PDF is gone fails the document while naming the page range
+- [X] T137 [US5] Implement part-aware restart recovery in `src/pdf2md/dispatcher.py`
 
 ### Documentation and measurement
 
-- [ ] T138 [P] Document the six variables in `deploy/.env.example` and add a splitting section to `deploy/README.md` — what gets split, what gets refused, and that re-conversion replaces a document's section files
+- [X] T138 [P] Document the six variables in `deploy/.env.example` and add a splitting section to `deploy/README.md` — what gets split, what gets refused, and that re-conversion replaces a document's section files
 - [ ] T139 [P] Extend `ops/measure-fidelity.py` with `--seams`, scoring tables that span a part boundary separately from tables elsewhere (SC-013)
-- [ ] T140 Resolve research open item O7 — measure seconds per page across the fidelity corpus and set `PDF2MD_PART_MAX_PAGES` from it; record the figure in `deploy/README.md` §10. The default of 100 is a guess with a safety factor
+- [ ] T140 Resolve research open item O7 — measure seconds per page across the fidelity corpus and set `PDF2MD_PART_MAX_PAGES` from it; record the figure in `deploy/README.md` §11. The default of 100 is a guess with a safety factor
 - [ ] T141 Resolve research open item O8 — run V17 and confirm seam damage stays inside SC-002's budget; if it does not, the boundary-selection escape hatch in research.md R15 becomes necessary
 - [ ] T142 Run V13–V16 from [quickstart.md](./quickstart.md) against the deployed stack and record the results
 
@@ -564,4 +564,4 @@ deployed — they are measurements and confirmations, not unwritten code:
 | T089 | Twenty real complex PDFs. `tests/fixtures/corpus/` holds the manifest schema, the trait coverage the set must have, and instructions; the documents themselves have to be chosen from what this workgroup actually converts |
 | T091 | T089 plus the deployed stack, then `ops/measure-fidelity.py` (the harness itself is written and exercised) |
 
-`deploy/README.md` §10 is the table to record those measurements in.
+`deploy/README.md` §11 is the table to record those measurements in.

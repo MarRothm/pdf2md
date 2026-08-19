@@ -100,3 +100,51 @@ async def test_an_engine_that_forgot_a_task_leads_to_a_resubmission_not_a_stuck_
 
     await dispatcher.drain()
     assert (await client.get(f"/api/jobs/{job_id}")).json()["status"] == "succeeded"
+
+
+async def test_a_restart_mid_split_resubmits_only_the_unfinished_parts(
+    upload, client, dispatcher, stub_engine, settings, db
+):
+    """A part that already converted keeps its Markdown; only the rest go back."""
+    settings.part_max_pages = 10
+    settings.parts_in_flight = 1
+    stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
+
+    body = (await upload(("long.pdf", pdf_bytes(b"restart", pages=40)))).json()
+    job_id = body["accepted"][0]["job_id"]
+    for _ in range(4):  # get at least one part converted
+        await dispatcher.run_once()
+    converted = [part for part in db.parts_for_job(job_id) if part.markdown]
+    assert converted, "the test needs at least one finished part to be meaningful"
+
+    stub_engine.reset_tasks()
+    dispatcher.recover_in_flight()
+
+    kept = [part for part in db.parts_for_job(job_id) if part.markdown]
+    assert len(kept) == len(converted)
+
+    await dispatcher.drain()
+    assert (await client.get(f"/api/jobs/{job_id}")).json()["status"] == "succeeded"
+
+
+async def test_a_split_document_whose_upload_vanished_names_the_missing_pages(
+    upload, client, dispatcher, stub_engine, storage, settings, db
+):
+    settings.part_max_pages = 10
+    settings.parts_in_flight = 1
+    stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
+
+    body = (await upload(("gone.pdf", pdf_bytes(b"gone", pages=30)))).json()
+    job_id = body["accepted"][0]["job_id"]
+    for _ in range(4):
+        await dispatcher.run_once()
+
+    content_hash = db.get_job(job_id).content_hash
+    storage.delete_inbox_file(content_hash)
+    storage.delete_part_files(content_hash)
+    await dispatcher.drain()
+
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    assert detail["status"] in {"succeeded_incomplete", "failed"}
+    if detail["status"] == "succeeded_incomplete":
+        assert detail["missing_page_ranges"]

@@ -732,6 +732,29 @@ class Database:
                 (stamp, part_id),
             )
 
+    def requeue_unfinished_parts(self, job_id: str) -> int:
+        """Return unfinished parts to the queue after a restart, keeping finished ones.
+
+        Engine task ids do not survive an engine restart, so a part that was in flight is
+        resubmitted. A part that already succeeded keeps its Markdown and is not converted
+        again — that work is done and paid for (data-model.md restart rules).
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "UPDATE conversion_part SET status = 'queued', engine_task_id = NULL,"
+                " started_at = NULL WHERE job_id = ? AND status IN ('submitted','running')",
+                (job_id,),
+            )
+            reset = cursor.rowcount
+            conn.execute(
+                "UPDATE conversion_job SET parts_completed ="
+                " (SELECT COUNT(*) FROM conversion_part"
+                "  WHERE job_id = ? AND status IN ('succeeded','failed','timed_out'))"
+                " WHERE id = ?",
+                (job_id, job_id),
+            )
+        return reset
+
     def count_parts_in_flight(self, job_id: str) -> int:
         with self.connection() as conn:
             row = conn.execute(

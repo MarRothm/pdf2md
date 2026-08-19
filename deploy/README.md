@@ -130,7 +130,46 @@ Plan for around 8 GB for the images plus whatever the outbox accumulates.
 
 ---
 
-## 5. Health and logs
+## 5. Long documents: splitting and section files
+
+Two limits used to make a long PDF simply fail. Both are now handled without you doing
+anything, and the third case — a document too long for any of it — is refused honestly.
+
+| Document | What happens |
+|---|---|
+| Up to `PDF2MD_PART_MAX_PAGES` (100) | Converted whole, exactly as before |
+| Longer than that | Split into page ranges, converted a couple at a time, and joined back into one document. The page shows *Converting — part 7 of 20* |
+| Longer than `PDF2MD_MAX_TOTAL_PAGES` (10,000) | **Refused at upload**, in a second, for its length — with the suggestion to split it. Never described as damaged |
+| Password-protected, or structurally unreadable | Also refused at upload now, rather than after a conversion attempt |
+
+**If one part fails, the rest are still written.** The document reports *Converted — pages
+N–M are missing*, and the gap is marked inside the Markdown as well as on the page. That
+matters because job history is pruned after `PDF2MD_JOB_HISTORY_DAYS` while the file in
+the outbox is the durable record — a warning that lived only on the page would disappear
+while the incomplete file stayed in AnythingLLM forever.
+
+**Very large output arrives as section files.** Above
+`PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES` the outbox receives
+`{slug}--{hash12}--{ordinal}-{section}.md` rather than one enormous file. This is about
+citations, not search quality: AnythingLLM chunks whatever it is given and ranks chunks,
+so file boundaries do not change what it finds — but they do change what it names when it
+answers. A 2000-page manual as one file cites "the manual"; as section files it cites the
+chapter.
+
+⚠️ **Re-converting a document replaces its own section files.** This is the only place the
+stack deletes from the outbox, and it is deliberately narrow — only files this service
+wrote, only for the document being re-converted. Without it, an engine upgrade that
+detects headings differently would leave two contradictory versions of the same document
+for AnythingLLM to cite.
+
+**The part size is a starting value, not a measurement.** `PDF2MD_PART_MAX_PAGES=100` is
+sized to the engine's 40-minute per-document ceiling with a safety factor. Measure seconds
+per page on your own corpus and set it properly — the same discipline as
+`DOCLING_MEM_LIMIT`.
+
+---
+
+## 6. Health and logs
 
 - **Portainer's health column** reflects real checks: `/healthz` on the web service and
   the engine's own health endpoint (FR-018).
@@ -146,7 +185,7 @@ queue and convert when the engine returns.
 
 ---
 
-## 6. How the isolation works, and how to prove it
+## 7. How the isolation works, and how to prove it
 
 Isolation here is a property of the stack file, not a promise or a host firewall rule.
 That matters because a Portainer redeploy carries the stack file with it and would not
@@ -211,7 +250,7 @@ not be immediately open to the network.
 
 ---
 
-## 7. Importing into AnythingLLM
+## 8. Importing into AnythingLLM
 
 Delivery into AnythingLLM is deliberately manual — the stack writes files, you decide
 when to ingest them.
@@ -257,7 +296,7 @@ accident.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
@@ -272,7 +311,7 @@ accident.
 
 ---
 
-## 9. Version pinning, and what has been verified
+## 10. Version pinning, and what has been verified
 
 Both images are pinned by tag **and** digest. The tag is for humans; the digest is the
 actual pin, because a tag can be re-pointed upstream and a digest cannot.
@@ -308,7 +347,7 @@ shows up there and nowhere else.
 
 ---
 
-## 10. Measurements to record here
+## 11. Measurements to record here
 
 These come from the deployed stack and belong in this file once run, so the next person
 inherits numbers rather than assumptions.
