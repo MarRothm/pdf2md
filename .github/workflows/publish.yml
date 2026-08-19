@@ -21,9 +21,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Derive the version from the tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # The owner is `MarRothm`, but OCI repository names must be lowercase — passing
+      # `github.repository_owner` through unchanged makes the reference invalid and the
+      # push fails before it builds anything.
+      - name: Derive the version and the image reference
+        id: image
+        run: |
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "name=ghcr.io/${owner}/pdf2md-web" >> "$GITHUB_OUTPUT"
 
       # build-push-action needs a buildx builder that can export a real image manifest;
       # the default docker driver refuses the `platforms:` input.
@@ -46,14 +52,14 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/pdf2md-web:${{ steps.version.outputs.version }}
+          tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
           provenance: false
 
       # The digest is what goes into deploy/docker-compose.yml. Printing it in the job
       # summary means the operator does not have to go looking for it.
       - name: Record the digest for the stack file
         run: |
-          image="ghcr.io/${{ github.repository_owner }}/pdf2md-web:${{ steps.version.outputs.version }}"
+          image="${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}"
           {
             echo "### Pin this in \`deploy/docker-compose.yml\`"
             echo
