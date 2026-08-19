@@ -353,6 +353,13 @@ exactly once (R3, R14).
 **Checkpoint**: A 2000-page PDF converts unattended into citable section files, and a
 document too long even for that is refused in a second with a reason that is true.
 
+**Progress 2026-08-19**: the upload side and both new modules are built and green
+(T113–T119, T129, T130). What remains is the dispatcher rework — T120–T128 and T131–T137 —
+which turns one job into one job with N parts. That is a single coherent piece of work and
+should be done in one go rather than in fragments: `fetch_and_persist` is where the
+single-use result guarantee lives, and a half-converted dispatcher can appear to work while
+silently dropping a part's Markdown.
+
 ---
 
 ## Dependencies & Execution Order
