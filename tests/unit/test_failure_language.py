@@ -71,6 +71,7 @@ def test_messages_tell_the_reader_what_to_do_or_what_happened(message):
         (["Document has too many pages (3000 > 2000)"], "larger than the converter accepts"),
         (["MemoryError: worker exhausted"], "ran out of resources"),
         (["unsupported format detected"], "could not handle"),
+        (["Input document contract.pdf is not valid."], "would not accept this document"),
         (["something nobody anticipated"], "could not be converted"),
     ],
 )

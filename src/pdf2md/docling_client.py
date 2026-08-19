@@ -76,6 +76,15 @@ _FAILURE_PATTERNS: list[tuple[tuple[str, ...], str]] = [
         "Split it into smaller files and try again.",
     ),
     (
+        # docling's InputDocument marks a file invalid for seven different reasons —
+        # size, page count, backend load failure, and others — and none of them mean the
+        # file is damaged. Saying so would send someone to re-export a perfectly good PDF.
+        ("not valid", "not allowed", "policy"),
+        "The converter would not accept this document. It may be protected, or saved in a "
+        "form the converter cannot open — try re-exporting it as a PDF from the original "
+        "application.",
+    ),
+    (
         ("pdfium", "corrupt", "damaged", "malformed", "eof", "parse", "invalid pdf", "cannot read"),
         "This PDF could not be read — the file looks damaged or incomplete. "
         "Try re-saving or re-exporting it, then upload it again.",
