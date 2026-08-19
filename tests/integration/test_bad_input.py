@@ -52,3 +52,31 @@ async def test_a_bad_document_does_not_stop_the_good_one_beside_it(
     assert jobs["good.pdf"]["status"] == "succeeded"
     assert jobs["corrupt.pdf"]["status"] == "failed"
     assert len(list(storage.outbox_path.glob("*.md"))) == 1
+
+
+async def test_a_page_limit_failure_says_so_rather_than_blaming_the_file(
+    convert, client, storage, stub_engine
+):
+    """The engine's reason has to reach the message, not just the log (FR-011).
+
+    A document over `DOCLING_SERVE_MAX_NUM_PAGES` is not damaged, and telling its owner
+    to re-upload it wastes an hour of their time for a document that can never succeed.
+    Regression test: the poll-failure path used to derive the message from the word
+    "failure" alone, so every engine failure read as "the PDF is probably damaged".
+    """
+    stub_engine.set_behavior(
+        "huge.pdf",
+        TaskBehavior(
+            task_status_on_finish="failure",
+            errors=["Document has too many pages (2413 > 2000)"],
+        ),
+    )
+    body = (await convert(("huge.pdf", pdf_bytes(b"many pages")))).json()
+    detail = (await client.get(f"/api/jobs/{body['accepted'][0]['job_id']}")).json()
+
+    assert detail["status"] == "failed"
+    assert "larger than the converter accepts" in detail["failure_reason"]
+    assert "damaged" not in detail["failure_reason"]
+    assert "2413" not in detail["failure_reason"], "engine detail belongs in engine_errors"
+    assert detail["engine_errors"] == ["Document has too many pages (2413 > 2000)"]
+    assert list(storage.outbox_path.glob("*.md")) == []

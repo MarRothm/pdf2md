@@ -242,8 +242,11 @@ class Dispatcher:
                         task_id=job.engine_task_id,
                     )
             elif poll.task_status is TaskStatus.FAILURE:
-                reason = DoclingClient.failure_reason_from(engine_status="failure")
-                self.db.finish_job(job.id, JobStatus.FAILED, failure_reason=reason)
+                errors = await self._failure_detail(job)
+                reason = DoclingClient.failure_reason_from(engine_status="failure", errors=errors)
+                self.db.finish_job(
+                    job.id, JobStatus.FAILED, failure_reason=reason, engine_errors=errors
+                )
                 log_job(
                     logger,
                     "job_failed",
@@ -255,6 +258,27 @@ class Dispatcher:
                 )
             else:
                 await self.fetch_and_persist(job)
+
+    async def _failure_detail(self, job: ConversionJob) -> list[str]:
+        """The engine's own words for why a task failed, so the message can be specific.
+
+        Without these, `failure_reason_from` sees only the word "failure" and every
+        engine-level failure reads as "the PDF is probably damaged" — including the ones
+        that have an accurate message waiting for them, such as exceeding the page limit
+        (FR-011).
+
+        Consuming the single-use result here costs nothing: a failed task has no
+        `md_content` to lose and the job is terminal either way, so this is the one place
+        the hazard in research.md R3 does not apply.
+        """
+        if not job.engine_task_id:
+            return []
+        try:
+            result = await self.engine.fetch_result(job.engine_task_id)
+        except (TaskNotFoundError, EngineUnavailableError):
+            # No detail available. The generic message is then the honest one.
+            return []
+        return result.errors
 
     def _handle_forgotten_task(self, job: ConversionJob) -> None:
         if self.storage.has_inbox_file(job.content_hash):
