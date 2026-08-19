@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
+
 import httpx
 import pytest
+from pypdf import PdfWriter
 
 from pdf2md.config import Settings
 from pdf2md.main import create_app
@@ -12,10 +15,27 @@ from tests.stubs.docling_stub import StubEngine
 MINIMAL_PDF_TAIL = b"1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\nstartxref\n0\n%%EOF\n"
 
 
-def pdf_bytes(marker: bytes = b"body", *, encrypted: bool = False) -> bytes:
-    """A byte string a PDF sniffer accepts; `marker` makes the content unique."""
-    trailer = b"trailer<</Root 1 0 R/Encrypt 9 0 R>>\n%%EOF\n" if encrypted else MINIMAL_PDF_TAIL
-    return b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n" + marker + b"\n" + trailer
+def pdf_bytes(marker: bytes = b"body", *, encrypted: bool = False, pages: int = 1) -> bytes:
+    """A real PDF of `pages` blank pages; `marker` makes the content unique.
+
+    These have to be genuinely parseable now: the service reads the page tree at upload to
+    decide whole/split/refused (FR-036), so a byte string that merely looks like a PDF
+    would be refused as damaged before any test got to its actual subject.
+    """
+    writer = PdfWriter()
+    for _ in range(max(1, pages)):
+        writer.add_blank_page(width=612, height=792)
+    writer.add_metadata({"/Keywords": marker.decode("latin-1")})
+    if encrypted:
+        writer.encrypt("password")
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def damaged_pdf_bytes(marker: bytes = b"broken") -> bytes:
+    """Passes a magic-byte sniff, fails a structural read — the FR-007 rejection path."""
+    return b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n" + marker + b"\n" + MINIMAL_PDF_TAIL
 
 
 @pytest.fixture

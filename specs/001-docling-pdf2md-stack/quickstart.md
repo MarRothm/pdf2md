@@ -189,6 +189,55 @@ Copy the outbox contents into AnythingLLM and ingest them, then ask 10 spot-chec
 
 ---
 
+### V13 — A long document splits itself (FR-034, FR-037; SC-012)
+
+Upload a PDF of at least ten times `PDF2MD_PART_MAX_PAGES` — with the default of 100, that
+means 1000 pages or more.
+
+**Expected**: it is accepted, not refused. The entry shows *Converting — part N of M* and
+the counter advances. It completes unattended, and the outbox holds output covering the
+whole document. Nothing in the log mentions a page-limit or timeout failure.
+
+### V14 — A document above the ceiling is refused honestly (FR-036)
+
+Upload a PDF longer than `PDF2MD_MAX_TOTAL_PAGES`.
+
+**Expected**: refused **at upload**, in a second rather than after a conversion attempt,
+with a reason that says it is too long and what to do about it. It never reaches the queue,
+and nothing suggests the file is damaged. Repeat with an encrypted PDF and with a truncated
+one: both are refused at upload too, each with its own accurate reason.
+
+### V15 — Section files and their citations (FR-033; SC-014)
+
+Convert a document whose Markdown exceeds `PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES`.
+
+**Expected**: the outbox holds `{slug}--{hash12}--{ordinal}-{section}.md` files in reading
+order rather than one large file, each starting at a heading. Re-convert the same document:
+the file count does not grow and the existing files are overwritten in place. Import them
+into AnythingLLM and ask a question answerable from one section — the citation names that
+section, not just the document.
+
+### V16 — One bad part does not discard the rest (FR-035)
+
+Convert a long document containing one page the engine cannot handle, or lower
+`DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT` far enough that a single part times out.
+
+**Expected**: the sections from the parts that succeeded are written. The document reports
+*Converted — pages N–M are missing*, and **the gap is marked inside the Markdown**, not only
+on the page — job history is pruned after 30 days while the file is forever.
+
+### V17 — Splitting costs no fidelity (SC-013)
+
+```bash
+ops/measure-fidelity.py --base-url http://10.0.0.19:8080 --seams
+```
+
+**Expected**: headings ≥95% and tables ≥90% for the split document, and tables that span a
+part boundary scored separately — that number is the one that says whether the seam
+tradeoff in research.md R15 held.
+
+---
+
 ## Local development (no Mac mini needed)
 
 ```bash

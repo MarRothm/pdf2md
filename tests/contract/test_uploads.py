@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.conftest import pdf_bytes
+from tests.conftest import damaged_pdf_bytes, pdf_bytes
 
 pytestmark = pytest.mark.contract
 
@@ -76,3 +76,51 @@ async def test_a_job_is_listed_immediately_after_the_upload_returns(upload, clie
 
 async def test_the_batch_note_is_optional(upload):
     assert (await upload(("report.pdf", pdf_bytes(b"n")))).status_code == 202
+
+
+async def test_a_document_over_the_page_ceiling_is_refused_for_its_length(client, settings):
+    """Not as damaged. That mislabelling is what this whole capability came from (FR-036)."""
+    settings.max_total_pages = 5
+    response = await client.post(
+        "/api/uploads", files=[("files", ("huge.pdf", pdf_bytes(b"h", pages=9), "application/pdf"))]
+    )
+
+    body = response.json()
+    assert body["accepted"] == []
+    reason = body["rejected"][0]["reason"]
+    assert "9 pages" in reason
+    assert "damaged" not in reason.lower()
+    assert "split" in reason.lower()
+
+
+async def test_an_unreadable_pdf_is_refused_at_upload_not_after_conversion(client):
+    response = await client.post(
+        "/api/uploads",
+        files=[("files", ("broken.pdf", damaged_pdf_bytes(), "application/pdf"))],
+    )
+
+    body = response.json()
+    assert body["accepted"] == []
+    assert "damaged or incomplete" in body["rejected"][0]["reason"]
+
+
+async def test_a_refused_document_never_becomes_a_job(client, settings):
+    settings.max_total_pages = 2
+    await client.post(
+        "/api/uploads", files=[("files", ("huge.pdf", pdf_bytes(b"j", pages=6), "application/pdf"))]
+    )
+
+    assert (await client.get("/api/jobs")).json()["jobs"] == []
+
+
+async def test_the_page_count_is_known_from_upload_onwards(client):
+    """It is what decides whole/split/refused, so it cannot wait for the engine."""
+    body = (
+        await client.post(
+            "/api/uploads",
+            files=[("files", ("doc.pdf", pdf_bytes(b"k", pages=12), "application/pdf"))],
+        )
+    ).json()
+
+    detail = (await client.get(f"/api/jobs/{body['accepted'][0]['job_id']}")).json()
+    assert detail["page_count"] == 12

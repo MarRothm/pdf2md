@@ -187,6 +187,84 @@ Reimplementing a queue, worker pool, and timeout supervisor around the raw libra
 
 ---
 
+## R11. Reading and splitting PDFs in the web service
+
+**Decision**: `pypdf` — pure Python, no system libraries. It supplies the page count at upload and writes page-range PDFs into the inbox volume for the parts.
+
+**Rationale**: The image is `python:3.12-slim` and every dependency has to survive a native `arm64` build with no apt packages. `pypdf` needs neither. All this feature asks of it is structural: how many pages, and give me pages *m* through *n* — not rendering, not text extraction, which is the engine's job.
+
+Counting at upload pays for itself twice over beyond splitting (FR-036):
+
+- A PDF whose page tree cannot be read is now rejected **at upload** with the "looks damaged" message, instead of after a round trip through the engine. The user learns in a second rather than in forty minutes.
+- An encrypted PDF raises a distinguishable error, so the password message (already in `_FAILURE_PATTERNS`) is delivered immediately and never reaches the queue at all.
+
+**Disk cost**: the parts of a document total roughly the size of the original, so a split document occupies about twice its size in the inbox volume until reaped. They are reaped on the source document's existing schedule.
+
+**Alternatives considered**:
+
+- *`pikepdf`*: rejected — it binds to qpdf, a C++ library, which means system packages in the image and a heavier arm64 build for capability this feature does not use.
+- *`pypdfium2`*: rejected — a rendering engine where only the page tree is needed, and the engine already carries its own copy of pdfium.
+- *Shelling out to `qpdf` or `mutool`*: rejected — a system binary in the image, plus error handling through exit codes and stderr parsing rather than typed exceptions.
+- *Asking the engine for the page count first*: rejected — it costs a full conversion to learn a number that lives in the PDF header, and it cannot work for the document that is too large to convert.
+
+---
+
+## R12. Part size, and the watchdog that would otherwise kill every split document
+
+**Decision**: `PDF2MD_PART_MAX_PAGES`, default **100**, a starting value to be replaced by measurement. The job watchdog changes from per-document to **per-part**: a document's ceiling becomes its part count multiplied by the per-part allowance.
+
+**Rationale**: Two engine ceilings apply — `MAX_NUM_PAGES` at 2000 and `MAX_DOCUMENT_TIMEOUT` at 2400s — and **the time ceiling binds far sooner**. At 10 s/page a part of 100 pages takes 1000 s, comfortably inside 2400 s, and 100 is well under 2000. Sizing to the time budget satisfies both by construction; sizing to the page ceiling satisfies neither (FR-034).
+
+**The watchdog is the trap.** `PDF2MD_JOB_TIMEOUT_SECONDS` is 2700 s measured from `created_at`. A twenty-part document cannot finish inside 2700 s — the watchdog would time out every document that splitting exists to rescue, and it would do so *after* burning 45 minutes of engine time. This is not a tuning issue; a per-document watchdog is simply the wrong shape once a document is many conversions.
+
+**VERIFY AT IMPLEMENTATION**: measure seconds per page across the fidelity corpus and set `PART_MAX_PAGES` so the slowest realistic part lands at roughly half the engine's per-document timeout. The default of 100 is a guess with a safety factor, not a measurement.
+
+**Alternatives considered**: sizing parts by byte count (rejected — bytes predict conversion time poorly; a scanned page and a text page differ by orders of magnitude at similar sizes); estimating per-document time from page count and splitting only when the estimate exceeds the timeout (rejected for v1 — it needs a throughput model that does not exist yet, and a fixed part size needs none).
+
+---
+
+## R13. Turning one Markdown into section files
+
+**Decision**: after the parts are joined, split the Markdown on the highest heading level that actually occurs, but only when the joined output exceeds `PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES`. Sections are bounded on both sides: those under `SECTION_MIN_BYTES` merge into their predecessor, and those over `SECTION_MAX_BYTES` are divided at the next heading level down, falling back to a page-boundary split if a single section is still oversized.
+
+Names are `{slug}--{hash12}--{ordinal:03d}-{section-slug}.md`.
+
+**Rationale**: FR-033. The ordinal keeps the document in reading order in Finder and in AnythingLLM's document list, and the content hash keeps every file traceable to the source PDF. Determinism holds because the same bytes through the same engine produce the same headings — which is exactly why an engine upgrade is the one thing that can change the set (below).
+
+**Splitting on the highest level present** rather than always on `#` matters: plenty of converted documents start at `##`, and a rule that keys on `#` would silently produce one file for them, defeating the feature on a document that needed it.
+
+**Orphaned files on re-conversion**: if an engine upgrade changes heading detection, re-converting produces a different set of section files and the old ones would linger — stale content that AnythingLLM keeps citing. **Decision: on re-conversion, delete the previous run's section files for that `content_hash` before writing the new set.** They are known exactly, from `MarkdownOutput` rows.
+
+This is a deliberate exception to "nothing prunes the outbox" and the only place the service deletes from it. It is narrow by construction — only files this service wrote, only for the document being re-converted, only within the same run — and the alternative is worse: an outbox that accumulates contradictory copies of the same document with no way to tell which is current.
+
+**Alternatives considered**: splitting the *PDF* by section (rejected — impossible, since section boundaries are what conversion discovers; the layout model is what finds the headings); a fixed byte split with no regard for headings (rejected — cuts mid-sentence and produces citations that name nothing).
+
+---
+
+## R14. Parts in the job model, and keeping the queue fair
+
+**Decision**: a `conversion_part` table, one row per part with its own `engine_task_id` and status. `ConversionJob` remains the document-level record the page shows and gains `part_count` and `parts_completed`. The dispatcher keeps at most `PDF2MD_PARTS_IN_FLIGHT` (default 2) parts of any one document in the engine at a time.
+
+**Rationale**: the page shows one entry per submitted document (FR-037), so the document-level job has to stay the unit the user sees; parts are bookkeeping beneath it. The in-flight cap is what stops a 20-part document from taking 20 of the engine's 100 queue slots at once — the ceiling in FR-036 bounds the worst case, but the cap is what keeps a large document from starving everyone else's small ones while it runs. Two matches the engine's worker count, so the engine stays busy without the queue filling with one document's work.
+
+**Restart behaviour**: parts follow the document. On restart, an incomplete document is resubmitted from the inbox as before — but only its unfinished parts, since completed parts have their Markdown already. Parts whose source PDF is gone fail the document per FR-035, naming the page range.
+
+**Alternatives considered**: one `ConversionJob` row per part with a parent job id (rejected — every query that drives the page would need to aggregate, and `already_converted`, suspect-yield, and reaping all key on the document); submitting all parts at once (rejected — measured against `QUEUE_MAX_SIZE=100`, one large document would monopolise the queue).
+
+---
+
+## R15. Content that spans a part boundary
+
+**Decision**: accept it, measure it, and do not attempt reconciliation in v1. SC-013 is the gate.
+
+**Rationale, with the arithmetic**: at 100-page parts a 2000-page document has 19 seams. Even assuming *every* seam cuts a table, that is 19 damaged tables in a document that holds hundreds — inside the 10% budget SC-002 already allows. The cost is bounded and visible; a table that stops and restarts is obvious to a reader.
+
+**Overlap-and-deduplicate was considered and rejected**, and it is worth recording why, because it looks like the obvious fix: overlapping parts by a page means detecting and removing the duplicated page's converted text at the join, and that match is a heuristic over model output that varies between runs. A wrong match silently deletes a page of content. Trading a visible broken table for silent data loss is a bad trade in a corpus nobody will re-read.
+
+**If measurement says otherwise**: the escape hatch is choosing boundaries at pages where no table continues across the break, which needs a structural pre-pass over the document. Deferred until SC-013 says it is needed.
+
+---
+
 ## Open items carried into implementation
 
 | # | Item | Handling |
@@ -196,4 +274,6 @@ Reimplementing a queue, worker pool, and timeout supervisor around the raw libra
 | O3 | ~~Behavior of `pull_policy: never` through the Portainer UI~~ | **OBSOLETE.** Superseded by the GitHub deployment clarification — the stack now pulls from a registry (R5). Replaced by O5 |
 | O5 | First deploy through Portainer EE's **Repository** method | Verify the compose path resolves, stack variables reach the `${...}` placeholders, no credential is requested for the public repo, and a redeploy reuses already-pulled digests (R5) |
 | O6 | GHCR package visibility after the first CI publish | FR-031 requires anonymous pulls. Confirm by pulling from a machine that has never logged in to GHCR; if the package was created private, set it public once in the package settings (R10) |
+| O7 | Measured seconds per page across the fidelity corpus, to set `PDF2MD_PART_MAX_PAGES` | The default of 100 is a guess with a safety factor. Measure during the corpus run (R12) |
+| O8 | Whether seam damage stays inside SC-002's budget in practice | Measure `ops/measure-fidelity.py` on a document large enough to be split, comparing tables at seams against tables elsewhere (R15) |
 | O4 | Whether `partial_success` from the engine should count as converted | **DECIDED: it counts as converted, and is surfaced distinctly.** The job ends `succeeded`, the Markdown is written, and `engine_status=partial_success` travels with the job so the page says parts could not be fully read. FR-029's suspect-yield check is separate: it ends a job `succeeded_suspect` when the output is implausibly small for the source |

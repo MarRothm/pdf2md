@@ -24,6 +24,10 @@ A knowledge worker on the local network has a complex PDF (multi-column layout, 
 2. **Given** a PDF whose pages are scanned images, **When** conversion completes, **Then** the resulting Markdown contains the recognized text of those pages rather than an empty or image-only result.
 3. **Given** a PDF containing embedded images or figures, **When** conversion completes, **Then** the Markdown references or describes each figure in its correct position in the document flow, and no figure silently removes surrounding text.
 4. **Given** a password-protected or corrupt PDF is uploaded, **When** conversion is attempted, **Then** the job is reported as failed on the page with a human-readable reason and no partial Markdown file is presented as a successful result.
+5. **Given** a PDF longer than the configured part size, **When** it is uploaded, **Then** it is divided into parts and converted without the user asking for that or knowing it happened, and the page shows which part is currently converting.
+6. **Given** one part of such a document fails, **When** the job ends, **Then** the sections drawn from the successful parts are still written, the document is reported as incomplete rather than as a success, and the missing page range is named both on the page and inside the Markdown.
+7. **Given** a PDF above the absolute page ceiling, **When** it is uploaded, **Then** it is refused immediately with a reason saying it is too long and what to do about it, not with a suggestion that the file is damaged.
+8. **Given** a converted document whose Markdown exceeds the size threshold, **When** the job finishes, **Then** the output location receives one file per detected section rather than one very large file, and re-converting the same document overwrites those files in place.
 
 ---
 
@@ -98,6 +102,8 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 ### Edge Cases
 
 - What happens when a PDF is very large (hundreds of pages) or a single conversion runs far longer than expected — is it allowed to run to completion, or is it cut off and reported as timed out?
+- What happens when a table or a paragraph spans the boundary between two parts — the split is made on page numbers, without knowing where the document's structures begin and end.
+- What happens to section files already in the outbox when the same document is re-converted after an engine upgrade that detects headings differently — the new files are written, but files for sections that no longer exist are left behind, and nothing prunes the outbox.
 - What happens when two files with the same name are uploaded by different users?
 - What happens when a user closes the browser page mid-batch, or opens it on a second machine — does the work continue and does the status still show?
 - What happens when a user uploads a file far larger than the page expects, or the upload is interrupted partway?
@@ -119,6 +125,11 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 - Q: Must the conversion models still be baked inside the engine image, or may they be downloaded once during provisioning? → A: Baked in — the pinned engine image ships its own weights; the stack never needs a model source. The host's Ollama is not used: it cannot serve docling's layout, table, and recognition models, and replacing them with a generative vision model would trade extracted content for generated content.
 - Q: Should the GitHub repository and the published web image be public, or private with credentials stored in Portainer? → A: Public repository, public image package — no credentials anywhere in the deployment.
 - Q: Should Portainer redeploy automatically when the GitHub repository changes, or only when an operator triggers it? → A: Manual only — no polling and no webhook; the operator decides when the deployed version changes.
+- Q: For a document large enough to require splitting, what should land in the outbox — one Markdown file, one per page-range part, or one per detected section? → A: One file per detected section, but only above a size threshold; smaller documents stay a single file. Retrieval sees chunks rather than files, so this is a citation decision, not a ranking one.
+- Q: What should trigger the split — the engine's page ceiling, or a part size chosen to fit the per-document timeout? → A: Split any document longer than a configured part size, sized from measured throughput so a part fits well inside the per-document timeout.
+- Q: If one part of a split document fails, should the whole document fail or should the successful sections still be written? → A: Write the successful sections, report the document incomplete, and mark the gap in the Markdown itself as well as on the page.
+- Q: Should the page count be read at upload, and should there be an upper bound beyond which the system declines to split? → A: Yes to both — count at upload, split accordingly, and refuse above a configured absolute ceiling with a plain-language reason.
+- Q: While a split document converts, should the page show one row for the document with part progress, or a row per part? → A: One row per document, showing which part is running — "Converting — part 7 of 20".
 
 ## Requirements *(mandatory)*
 
@@ -133,6 +144,7 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 - **FR-005**: The system MUST produce output that is valid Markdown suitable for direct ingestion by AnythingLLM, with no post-processing required by the user.
 - **FR-006**: The system MUST record, for every converted document, the source file identity and the time of conversion so an output file can be traced back to its source PDF.
 - **FR-007**: The system MUST reject unsupported, corrupt, or unreadable inputs with a human-readable failure reason and MUST NOT emit an output file for them.
+- **FR-036**: The system MUST determine a document's page count when it is uploaded, and MUST use it to decide immediately whether the document is converted whole, split into parts, or refused. A document above a configured absolute page ceiling MUST be refused at upload with a plain-language reason that says it is too long and what to do about it — never with a suggestion that the file is damaged. The ceiling exists to protect the shared queue: parts occupy queue slots, so without it one very long upload can hold every slot and stall every other document (FR-027, SC-008).
 - **FR-029**: The system MUST detect a conversion whose Markdown is empty or implausibly small for the source document, and MUST report it distinctly from an ordinary success, so that no one imports an empty document into AnythingLLM believing it converted. The output MUST still be written and retrievable, and a document that is genuinely blank MUST be reportable as blank rather than as a system failure.
 
 **Intake, status, and handoff**
@@ -140,10 +152,12 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 - **FR-008**: Users MUST be able to submit documents through a page opened in a standard web browser from any machine on the local network, with no client software to install.
 - **FR-009**: Users MUST be able to select and submit more than one document at a time from that page.
 - **FR-010**: The page MUST show the current status of each submitted document (queued, in progress, completed, failed, timed out) and update as jobs progress, without the user reloading or re-submitting.
+- **FR-037**: A split document MUST appear on the page as one entry, matching the one document the user submitted, and that entry MUST show which part is currently converting. A long document can take an hour or more, and an entry that shows no movement for that long is indistinguishable from a stalled one — the part counter is what makes legitimate slow progress legible (FR-010).
 - **FR-011**: The page MUST show a human-readable reason for every failed document.
 - **FR-012**: Users MUST be able to retrieve the converted Markdown for a completed document directly from that page.
 - **FR-013**: The system MUST write every successfully converted Markdown file to a dedicated output location on the Mac mini, from which an operator imports documents into AnythingLLM manually. Automatic delivery into AnythingLLM is out of scope.
 - **FR-014**: The system MUST name output files predictably and uniquely so that repeated conversions of the same source do not create ambiguous duplicates for the person importing them into AnythingLLM.
+- **FR-033**: When a converted document's Markdown exceeds a configured size threshold, the system MUST write one file per detected top-level section instead of a single file, so that an answer drawn from a very long document cites the section it came from rather than the whole document. Documents below the threshold MUST continue to produce exactly one output file. Section file names MUST be derived deterministically from the source document's identity and its section, so re-converting the same document overwrites its files in place rather than accumulating duplicates (FR-014). Section sizes vary, so the system MUST bound them: sections too small to stand alone are merged, and a section larger than the threshold is itself divided.
 
 **Deployment and operation**
 
@@ -170,13 +184,15 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 
 - **FR-027**: The system MUST limit how much work it performs at once so that a large batch does not exhaust the Mac mini's memory or make the host unresponsive.
 - **FR-028**: The system MUST fail a conversion that exceeds a documented maximum duration, report it as timed out, and continue processing the remaining documents.
+- **FR-034**: The system MUST convert a document longer than a configured part size by dividing it into parts of at most that size and converting each part, rather than submitting it whole and failing. The part size MUST be derived from measured conversion throughput so that a part completes well inside the engine's per-document timeout, not merely below its page ceiling — the time limit binds first at any realistic throughput. Splitting MUST be invisible in the result: the parts exist to get the work done, and the output is assembled from them (FR-033). The system's own per-document watchdog MUST account for the number of parts: a split document's total time is necessarily longer than any single part's, so a watchdog sized for one conversion would terminate every document that needed splitting — which is precisely the failure splitting exists to prevent. Part boundaries fall on page boundaries chosen without knowledge of the document's structure, so content that spans one — a table continuing across pages, most obviously — may be divided between parts and reassembled imperfectly. The system MUST NOT silently degrade table fidelity below the level SC-002 requires; how boundaries are chosen or reconciled is a design decision for the plan.
+- **FR-035**: When one part of a split document fails to convert, the system MUST still write the sections derived from the parts that succeeded, and MUST report the document as incomplete rather than as an ordinary success — the same distinction FR-029 draws for implausibly small output. The report MUST name the page range that is missing. The gap MUST also be marked in the Markdown itself, not only in the job history: job history is pruned after a documented retention period while the output location is the durable record, so a warning that lives only on the page disappears while the incomplete file remains in the knowledge base.
 
 ### Key Entities
 
 - **Source Document**: A PDF uploaded for conversion. Attributes: original file name, size, page count, time of upload.
 - **Batch**: A set of documents submitted together in one upload. Attributes: submission time, member documents, aggregate progress.
 - **Conversion Job**: One attempt to convert one source document. Attributes: status (queued, running, completed, failed, timed out), start and end time, failure reason, link to its source document and to its output.
-- **Markdown Output**: The converted result of a successful job. Attributes: file name, storage location, size, creation time, link back to the source document.
+- **Markdown Output**: The converted result of a successful job — one file for most documents, or one file per section for documents above the size threshold (FR-033). Attributes: file name, storage location, size, creation time, section title and ordinal where applicable, link back to the source document.
 - **Stack Deployment**: The running set of services on the Mac mini. Attributes: service health, storage locations in use, network exposure scope.
 
 ## Success Criteria *(mandatory)*
@@ -194,6 +210,9 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 - **SC-009**: A batch of converted documents taken from the output location and imported into AnythingLLM returns answers citing the correct source document in at least 9 of 10 spot-check questions.
 - **SC-010**: A user on the local network who has never seen the stack before can open its page and get a first document converted in under 5 minutes without written instructions or credentials.
 - **SC-011**: While a batch is running, the Mac mini remains responsive enough that other services on the host, including Portainer, stay usable.
+- **SC-012**: A document at least ten times the configured part size converts to completion unattended, its output is retrievable from the output location, and no page range is missing without being reported as missing.
+- **SC-013**: A split document meets the same fidelity thresholds as an unsplit one — at least 95% of headings and 90% of tables correctly represented (SC-002) — measured on content that spans a part boundary as well as content that does not, so that splitting itself costs no fidelity.
+- **SC-014**: For a document large enough to be written as section files, an answer drawn from it in AnythingLLM cites the section containing the passage rather than only the document as a whole (extends SC-009).
 
 ## Assumptions
 
@@ -205,6 +224,7 @@ A user selects a whole set of PDFs on the upload page in one go and lets the sta
 - Deployment is performed over the internet from GitHub: Portainer reads the stack definition from the repository and the host's container runtime pulls the images from a registry. The internet restriction applies to the running stack, not to the act of deploying it.
 - Scanned-page text recognition is limited to English unless additional language assets are explicitly bundled, since language packs cannot be fetched at runtime.
 - Input is limited to PDF. Other formats Docling may support (Office documents, HTML, images) are out of scope for this feature.
+- Automatic splitting requires the service to read a PDF's page structure and write out page ranges before any conversion happens — something it did not previously do, since until now a PDF was an opaque blob to be forwarded to the engine. This is a deliberate addition to what the service understands about its input, and it applies to every upload, because the page count is what decides whether a document is converted whole, split, or refused.
 - The stack is sized for a small workgroup — on the order of tens of documents per day, a handful of concurrent users — not for high-volume or multi-tenant use.
 - Source PDFs and converted Markdown may contain sensitive material; both remain on the Mac mini and are never transmitted off the local network.
 - Importing documents into AnythingLLM is a deliberate manual step performed by an operator; the stack makes no connection to AnythingLLM and holds no credentials for it.

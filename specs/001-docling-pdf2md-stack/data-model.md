@@ -30,7 +30,7 @@ A PDF accepted for conversion. Identified by content, not by filename — this i
 | `content_hash` | TEXT PK | SHA-256 of the PDF bytes, lowercase hex |
 | `original_filename` | TEXT | As supplied by the browser, sanitized for display only |
 | `size_bytes` | INTEGER | |
-| `page_count` | INTEGER NULL | Populated from the engine result when available |
+| `page_count` | INTEGER | Read from the PDF at upload (FR-036); it decides whole/split/refused before anything is queued |
 | `first_seen_at` | TEXT | ISO-8601 UTC |
 | `inbox_path` | TEXT NULL | Path in the inbox volume; NULL once the PDF has been reaped |
 
@@ -58,12 +58,41 @@ One attempt to convert one `SourceDocument`. The unit the page displays and the 
 | `attempt` | INTEGER | 1 on first try; incremented on restart-driven resubmission |
 | `failure_reason` | TEXT NULL | Human-readable, shown verbatim on the page (FR-011) |
 | `engine_errors` | TEXT NULL | JSON array copied from the engine's `errors[]`, for logs |
-| `output_filename` | TEXT NULL | Set on success; see `MarkdownOutput` |
+| `output_filename` | TEXT NULL | Set on success when the document produced a single file; NULL when it produced section files |
+| `part_count` | INTEGER | 1 for a document converted whole; N for a split document (FR-034) |
+| `parts_completed` | INTEGER | Drives "Converting — part 7 of 20" on the page (FR-037) |
+| `missing_page_ranges` | TEXT NULL | JSON array of page ranges whose part failed; non-NULL means the document is incomplete (FR-035) |
 
 **Rules**
 - `failure_reason` must be readable by a non-technical user. Engine stack traces go to `engine_errors` and the container log, never to this field.
 - A job never transitions out of a terminal state. A re-run creates a new job against the same `SourceDocument`.
 - Jobs are retained for `JOB_HISTORY_DAYS` (default 30), then pruned. Pruning a job never deletes its `MarkdownOutput` — the outbox is the durable record (FR-013).
+
+### ConversionPart
+
+One conversion of one page range. Bookkeeping beneath the job — the page never shows these
+rows, it shows their count (FR-037). A document converted whole has exactly one.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUIDv4 |
+| `job_id` | TEXT FK → `conversion_job.id` | |
+| `ordinal` | INTEGER | 1-based; parts are converted and joined in this order |
+| `first_page` | INTEGER | 1-based, inclusive |
+| `last_page` | INTEGER | inclusive |
+| `part_path` | TEXT NULL | Page-range PDF in the inbox volume; NULL once reaped |
+| `status` | TEXT | Same vocabulary as a job, minus `already_converted` |
+| `engine_task_id` | TEXT NULL | |
+| `markdown` | TEXT NULL | The part's converted Markdown, held until every part is done and they are joined |
+| `failure_reason` | TEXT NULL | Kept per part so FR-035 can name the page range that is missing |
+| `started_at` / `ended_at` | TEXT NULL | |
+
+`markdown` lives in the database rather than in a scratch file because of the single-use
+result hazard (R3): the engine serves each result exactly once, so a part's output must be
+durable the moment it is fetched. Holding it as a column means the fetch and the commit are
+one transaction, exactly as they are for an unsplit document.
+
+---
 
 ### MarkdownOutput
 
@@ -71,7 +100,9 @@ The result of a successful conversion, as written to the outbox.
 
 | Field | Type | Notes |
 |---|---|---|
-| `output_filename` | TEXT PK | `{slug}--{content_hash[:12]}.md` |
+| `output_filename` | TEXT PK | `{slug}--{hash12}.md`, or `{slug}--{hash12}--{ordinal:03d}-{section-slug}.md` for a section file (FR-033) |
+| `section_ordinal` | INTEGER NULL | NULL for a whole-document file; 1-based for section files |
+| `section_title` | TEXT NULL | The heading this file starts at, for display and for the citation an operator sees |
 | `content_hash` | TEXT FK → `source_document.content_hash` | |
 | `job_id` | TEXT FK → `conversion_job.id` | Job that produced the current file |
 | `bytes` | INTEGER | Size of the Markdown |
@@ -113,9 +144,11 @@ The result of a successful conversion, as written to the outbox.
                          └── yield below suspect threshold ──▶ succeeded_suspect ●
 ```
 
-Terminal states are marked ●: `succeeded`, `succeeded_suspect`, `already_converted`, `failed`, `timed_out`.
+Terminal states are marked ●: `succeeded`, `succeeded_suspect`, `succeeded_incomplete`, `already_converted`, `failed`, `timed_out`.
 
-**Status vocabulary shown to users** (FR-010): queued → *Queued*; submitted/running → *Converting*; succeeded → *Converted*; succeeded_suspect → *Converted — check output*; already_converted → *Already converted*; failed → *Failed*; timed_out → *Timed out*.
+`succeeded_incomplete` is new with splitting (FR-035): some parts converted and some did not, so output exists and is written, but a named page range is missing from it. It sits beside `succeeded_suspect` rather than beside `failed` — both say *here is your output, and here is why you should look at it*, which is the distinction FR-029 established and this reuses rather than reinvents.
+
+**Status vocabulary shown to users** (FR-010): queued → *Queued*; submitted/running → *Converting*, or *Converting — part 7 of 20* when the document was split (FR-037); succeeded → *Converted*; succeeded_suspect → *Converted — check output*; succeeded_incomplete → *Converted — pages 900–1000 are missing*; already_converted → *Already converted*; failed → *Failed*; timed_out → *Timed out*.
 
 ### Transition rules
 
@@ -128,7 +161,10 @@ Terminal states are marked ●: `succeeded`, `succeeded_suspect`, `already_conve
 | `submitted`/`running` | `succeeded` | Poll returns `success`, result fetched and persisted | Markdown written to outbox; inbox PDF eligible for reaping |
 | `submitted`/`running` | `succeeded_suspect` | Result persisted, but yield is below the suspect threshold | Markdown written to the outbox as normal; only the reported state differs (FR-029) |
 | `submitted`/`running` | `failed` | Poll returns `failure`, or the result fetch/persist fails | `failure_reason` set |
-| `submitted`/`running` | `timed_out` | Wall clock since `created_at` exceeds `JOB_TIMEOUT_SECONDS` | Job abandoned; the engine's own `MAX_DOCUMENT_TIMEOUT` is set lower so the engine gives up first |
+| `submitted`/`running` | `timed_out` | **Per part**: wall clock since a part was submitted exceeds `JOB_TIMEOUT_SECONDS`. A document's effective ceiling is therefore `part_count × JOB_TIMEOUT_SECONDS` | Job abandoned; the engine's own `MAX_DOCUMENT_TIMEOUT` is set lower so the engine gives up first. **A per-document watchdog would terminate every split document** — twenty parts cannot finish inside one part's allowance (research.md R12) |
+| `queued` | `queued` (split) | Page count at upload exceeds `PART_MAX_PAGES` | The PDF is divided into page-range parts in the inbox; one `ConversionPart` row per part; `part_count` set (FR-034) |
+| `submitted`/`running` | `succeeded_incomplete` | Every part reached a terminal state and at least one failed, but at least one succeeded | Output written from the parts that succeeded; `missing_page_ranges` set; the gap is marked in the Markdown itself, not only on the page (FR-035) |
+| `submitted`/`running` | `failed` | Every part failed | Nothing written; the reason names the first part's failure |
 | `queued`/`submitted`/`running` | `queued` (attempt+1) | Service restart, inbox PDF still present | Engine task IDs do not survive an engine restart, so the job is resubmitted rather than polled |
 | `queued`/`submitted`/`running` | `failed` | Service restart, inbox PDF missing | `failure_reason` = "interrupted by a restart and the uploaded file is no longer available" |
 
@@ -141,6 +177,34 @@ A successful conversion is flagged `succeeded_suspect` when the Markdown contain
 The output is **always written** — this is a reporting distinction, not a failure. A genuinely blank source scan legitimately lands here, which is the intended outcome: the user is told the result looks empty and can judge for themselves, rather than importing an empty file believing it converted.
 
 The threshold is a tuning knob, not a contract. Adjust it from measured corpus results (see the fidelity harness in tasks T089–T091) rather than by intuition.
+
+### Splitting and section output (FR-033 through FR-037)
+
+**At upload**, the page count is read from the PDF (R11) and decides the path:
+
+| Page count | Outcome |
+|---|---|
+| ≤ `PART_MAX_PAGES` | Converted whole, exactly as before. `part_count = 1` |
+| > `PART_MAX_PAGES`, ≤ `MAX_TOTAL_PAGES` | Divided into parts of at most `PART_MAX_PAGES` |
+| > `MAX_TOTAL_PAGES` | **Refused at upload** with a reason that says it is too long — never that it is damaged (FR-036) |
+| Unreadable page tree | Refused at upload as damaged, without reaching the queue |
+| Encrypted | Refused at upload as password-protected, without reaching the queue |
+
+**On completion**, the parts' Markdown is joined in `ordinal` order, and the joined text
+decides the output shape:
+
+| Joined size | Outcome |
+|---|---|
+| ≤ `SECTION_SPLIT_THRESHOLD_BYTES` | One file, named as it always was — the common case is unchanged |
+| > threshold | One file per section, split on the highest heading level present, bounded by `SECTION_MIN_BYTES` and `SECTION_MAX_BYTES` (research.md R13) |
+
+Re-converting a document that previously produced section files **deletes that document's
+previous section files first**, from the `MarkdownOutput` rows that name them. This is the
+only place the service deletes from the outbox, and it exists because an engine upgrade can
+change heading detection: without it, the outbox would hold two contradictory versions of
+the same document and AnythingLLM would cite either.
+
+---
 
 ### The single-use result hazard
 

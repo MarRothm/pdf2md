@@ -42,15 +42,26 @@ async def test_a_normal_document_does_not_trip_the_threshold(convert, client, st
     assert detail["display_status"] == "Converted"
 
 
-async def test_without_a_page_count_a_flat_floor_applies(convert, client, stub_engine, settings):
-    stub_engine.set_behavior("short.pdf", TaskBehavior(markdown="x" * 199, page_count=None))
-    stub_engine.set_behavior("long.pdf", TaskBehavior(markdown="y" * 201, page_count=None))
-    assert settings.suspect_min_chars_floor == 200
+async def test_the_page_count_comes_from_the_pdf_even_when_the_engine_omits_it(
+    convert, client, stub_engine, settings
+):
+    """Since the page count is read at upload (FR-036), the engine no longer has to supply
+    it — so the per-page threshold applies where the flat floor used to.
 
-    short = await _job(client, await convert(("short.pdf", pdf_bytes(b"short"))))
-    long = await _job(client, await convert(("long.pdf", pdf_bytes(b"long"))))
-    assert short["status"] == "succeeded_suspect"
-    assert long["status"] == "succeeded"
+    199 characters on the fixture's single page clears 50 characters per page comfortably,
+    where the old flat floor of 200 would have called it suspect. This is the more accurate
+    answer: the threshold is now measured against the document's real length.
+    """
+    stub_engine.set_behavior("short.pdf", TaskBehavior(markdown="x" * 199, page_count=None))
+    detail = await _job(client, await convert(("short.pdf", pdf_bytes(b"short"))))
+    assert detail["page_count"] == 1
+    assert detail["status"] == "succeeded"
+
+
+async def test_the_flat_floor_still_covers_a_document_with_no_page_count(dispatcher):
+    """The fallback survives for rows that predate upload-time counting (FR-029)."""
+    assert dispatcher.is_suspect_yield("x" * 199, None) is True
+    assert dispatcher.is_suspect_yield("y" * 201, None) is False
 
 
 async def test_the_suspect_output_is_written_like_any_other(convert, client, storage, stub_engine):

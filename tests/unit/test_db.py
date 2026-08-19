@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from pdf2md.clock import iso_ago
-from pdf2md.db import Database
+from pdf2md.db import SCHEMA, Database
 from pdf2md.models import JobStatus
 
 pytestmark = pytest.mark.unit
@@ -35,7 +35,7 @@ def test_migrations_are_idempotent(db):
     db.migrate()
     with db.connection() as conn:
         names = [row["name"] for row in conn.execute("SELECT name FROM schema_migration")]
-    assert names == ["001_initial"]
+    assert names == [name for name, _ in SCHEMA]
 
 
 def test_pragmas_are_set_on_every_connection(db):
@@ -148,3 +148,52 @@ def test_pruning_leaves_in_flight_jobs_alone(db):
     db.mark_submitted(job.id, "task", None)
     assert db.prune_history(before=iso_ago(days=0)) == 0
     assert db.get_job(job.id) is not None
+
+
+def test_migrating_an_existing_database_keeps_its_job_history(tmp_path):
+    """The status CHECK is rebuilt for `succeeded_incomplete`, and SQLite cannot alter a
+    constraint in place. History has to survive that rebuild — it survives a redeploy
+    (FR-017), so it must survive a schema change too.
+    """
+    from pdf2md.clock import now_iso
+    from pdf2md.db import SCHEMA, Database
+
+    database = Database(tmp_path / "old.sqlite")
+    # Bring up only the original schema, as a stack deployed before splitting would have.
+    with database.connection() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migration ("
+            " name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        conn.executescript(SCHEMA[0][1])
+        conn.execute(
+            "INSERT INTO schema_migration (name, applied_at) VALUES (?, ?)",
+            (SCHEMA[0][0], now_iso()),
+        )
+        conn.execute(
+            "INSERT INTO source_document"
+            " (content_hash, original_filename, size_bytes, first_seen_at)"
+            " VALUES ('abc123', 'old.pdf', 10, ?)",
+            (now_iso(),),
+        )
+        conn.execute(
+            "INSERT INTO conversion_job"
+            " (id, content_hash, submitted_filename, status, created_at, updated_at, attempt)"
+            " VALUES ('job-1', 'abc123', 'old.pdf', 'succeeded', ?, ?, 1)",
+            (now_iso(), now_iso()),
+        )
+
+    database.migrate()
+
+    with database.connection() as conn:
+        rows = list(conn.execute("SELECT id, status, part_count FROM conversion_job"))
+        assert [(r["id"], r["status"], r["part_count"]) for r in rows] == [
+            ("job-1", "succeeded", 1)
+        ]
+        # and the new status is now accepted where it was not before
+        conn.execute(
+            "INSERT INTO conversion_job"
+            " (id, content_hash, submitted_filename, status, created_at, updated_at, attempt)"
+            " VALUES ('job-2', 'abc123', 'new.pdf', 'succeeded_incomplete', ?, ?, 1)",
+            (now_iso(), now_iso()),
+        )

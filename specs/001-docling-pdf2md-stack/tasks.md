@@ -275,6 +275,86 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 
 ---
 
+## Phase 10: Automatic splitting of over-long documents
+
+**Added 2026-08-19** from the clarification that a document too long for the engine should be
+split rather than refused (spec Clarifications; FR-033 through FR-037; research.md R11–R15).
+
+**Goal**: A document of any length up to the ceiling converts unattended, and one large
+enough to be unwieldy arrives in the outbox as citable section files rather than one wall of
+Markdown.
+
+**Independent Test**: Upload a PDF of at least ten times `PART_MAX_PAGES`; it converts to
+completion with visible part progress and its output covers the whole document. Upload one
+above `MAX_TOTAL_PAGES`; it is refused at upload in a second, for its length, not as damaged.
+
+**⚠️ Two traps recorded in research, worth re-reading before starting**: the watchdog must
+become per-part or every split document dies at 45 minutes (R12), and a part's Markdown must
+be persisted in the same transaction that fetches it, because the engine serves each result
+exactly once (R3, R14).
+
+### Foundation for the phase
+
+- [X] T113 [P] [US1] Add `pypdf` to the runtime dependencies in `pyproject.toml` — pure Python, no system libraries, so the arm64 image build is unaffected (research.md R11)
+- [X] T114 [P] [US1] Add the six splitting settings to `src/pdf2md/config.py` with the defaults from [contracts/stack.md](./contracts/stack.md) — `PART_MAX_PAGES`, `MAX_TOTAL_PAGES`, `PARTS_IN_FLIGHT`, `SECTION_SPLIT_THRESHOLD_BYTES`, `SECTION_MIN_BYTES`, `SECTION_MAX_BYTES`
+- [X] T115 [US1] Add the `conversion_part` table and the new `conversion_job` and `markdown_output` columns to `src/pdf2md/db.py`, with a migration that runs against an existing database — deployed stacks carry job history that must survive (FR-017)
+
+### Reading and splitting the PDF
+
+- [X] T116 [P] [US1] Write `tests/unit/test_pdfinfo.py` — page count of a well-formed PDF; an encrypted PDF raises something distinguishable from a damaged one; a truncated PDF raises a parse error; an extracted page range has exactly the pages asked for
+- [X] T117 [US1] Implement `src/pdf2md/pdfinfo.py` — `page_count()` and `extract_range()` writing a page-range PDF into the inbox volume (research.md R11)
+
+### Upload-time decision (FR-036)
+
+- [X] T118 [P] [US1] Extend `tests/contract/test_uploads.py` — a document above `MAX_TOTAL_PAGES` is refused **at upload** for its length; an encrypted one for its password; an unreadable one as damaged; none of the three creates a job
+- [X] T119 [US1] Read the page count in `src/pdf2md/api/uploads.py` and decide whole / split / refused there, storing `page_count` on the `SourceDocument`. The refusal for length MUST NOT use the "damaged" wording — that mislabelling is what prompted this feature
+
+### Converting in parts (FR-034, FR-037)
+
+- [ ] T120 [P] [US1] Write `tests/integration/test_split.py` — a document over `PART_MAX_PAGES` produces the expected part count, every part converts, and one document's worth of output results
+- [ ] T121 [US1] Create `ConversionPart` rows and their page-range PDFs when a long document is queued, in `src/pdf2md/dispatcher.py`
+- [ ] T122 [US1] Submit parts respecting `PARTS_IN_FLIGHT` in `src/pdf2md/dispatcher.py`, so one long document cannot starve short ones behind it (research.md R14)
+- [ ] T123 [US1] Poll parts and persist each part's Markdown into its row **in the same transaction as the fetch** in `src/pdf2md/dispatcher.py` — the engine serves a result exactly once, so a part's output must be durable the moment it arrives (research.md R3)
+- [ ] T124 [US1] Join the parts' Markdown in `ordinal` order and write the output once every part is terminal, in `src/pdf2md/dispatcher.py`
+- [ ] T125 [US1] Change the watchdog in `src/pdf2md/dispatcher.py` from per-document to per-part (research.md R12). **A per-document watchdog terminates every split document** — this is not a tuning change
+- [ ] T126 [P] [US1] Extend `tests/integration/test_timeout.py` — a split document running longer than `JOB_TIMEOUT_SECONDS` in total is not timed out, while a single part exceeding it still is
+
+### When one part fails (FR-035)
+
+- [ ] T127 [P] [US1] Write a test in `tests/integration/test_split.py` — one failing part yields `succeeded_incomplete`, the missing page range is named, output from the surviving parts is written, and the gap appears **in the Markdown file** as well as on the page
+- [ ] T128 [US1] Implement `succeeded_incomplete`, `missing_page_ranges`, and the in-file gap marker across `src/pdf2md/dispatcher.py`, `src/pdf2md/models.py`, and `src/pdf2md/db.py`
+
+### Section files for the AnythingLLM handoff (FR-033)
+
+- [ ] T129 [P] [US4] Write `tests/unit/test_sectioning.py` — splits on the highest heading level actually present (not always `#`); sections below `SECTION_MIN_BYTES` merge; sections above `SECTION_MAX_BYTES` divide; names are deterministic and ordinals preserve reading order
+- [ ] T130 [US4] Implement `src/pdf2md/sectioning.py` (research.md R13)
+- [ ] T131 [US4] Write section files and one `MarkdownOutput` row each when the joined Markdown exceeds `SECTION_SPLIT_THRESHOLD_BYTES`, in `src/pdf2md/storage.py` and `src/pdf2md/dispatcher.py`; smaller documents keep producing exactly one file
+- [ ] T132 [US4] Delete the document's own previous section files before writing a new set, in `src/pdf2md/storage.py`, with a test asserting no other document's files are touched. This is the only outbox deletion the service performs and it exists because an engine upgrade can change heading detection (research.md R13)
+
+### What the page shows (FR-037)
+
+- [ ] T133 [P] [US1] Extend `tests/contract/test_jobs.py` — the list payload carries `part_count`, `parts_completed`, and `missing_page_ranges`; the detail payload carries `outputs[]`
+- [ ] T134 [US1] Add those fields to `src/pdf2md/models.py` and `src/pdf2md/api/jobs.py` per [contracts/web-api.md](./contracts/web-api.md)
+- [ ] T135 [US1] Render *Converting — part 7 of 20* and *Converted — pages N–M are missing* in `src/pdf2md/static/app.js`, showing the part counter only when `part_count > 1` so ordinary documents look exactly as they do now
+
+### Restart behaviour (FR-016, User Story 5)
+
+- [ ] T136 [P] [US5] Extend `tests/integration/test_restart_recovery.py` — a restart mid-split resubmits only the unfinished parts, and a part whose source PDF is gone fails the document while naming the page range
+- [ ] T137 [US5] Implement part-aware restart recovery in `src/pdf2md/dispatcher.py`
+
+### Documentation and measurement
+
+- [ ] T138 [P] Document the six variables in `deploy/.env.example` and add a splitting section to `deploy/README.md` — what gets split, what gets refused, and that re-conversion replaces a document's section files
+- [ ] T139 [P] Extend `ops/measure-fidelity.py` with `--seams`, scoring tables that span a part boundary separately from tables elsewhere (SC-013)
+- [ ] T140 Resolve research open item O7 — measure seconds per page across the fidelity corpus and set `PDF2MD_PART_MAX_PAGES` from it; record the figure in `deploy/README.md` §10. The default of 100 is a guess with a safety factor
+- [ ] T141 Resolve research open item O8 — run V17 and confirm seam damage stays inside SC-002's budget; if it does not, the boundary-selection escape hatch in research.md R15 becomes necessary
+- [ ] T142 Run V13–V16 from [quickstart.md](./quickstart.md) against the deployed stack and record the results
+
+**Checkpoint**: A 2000-page PDF converts unattended into citable section files, and a
+document too long even for that is refused in a second with a reason that is true.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -288,6 +368,7 @@ Single Python project at the repository root, per [plan.md](./plan.md): `src/pdf
 - **US5 (Phase 7)**: Depends on Foundational and on US1's dispatcher (T026, T027)
 - **Polish (Phase 8)**: Depends on the stories you intend to ship
 - **Deployment migration (Phase 9)**: Depends on US2 and US3 being complete (they are). Within the phase: T096→T097 gate everything, T100 produces the digest T102 needs, and T110–T112 need the Mac mini
+- **Splitting (Phase 10)**: Depends on US1 and US4. Within the phase: T113–T115 gate everything; T117 gates T119 and T121; T121→T122→T123→T124 are one sequence in `dispatcher.py`; T130 gates T131 and T132; T140–T142 need the deployed stack and the corpus
 
 ### Cross-story file conflicts
 
@@ -296,7 +377,8 @@ Three files are touched by more than one story. Sequence, do not parallelize, th
 | File | Touched by |
 |---|---|
 | `deploy/docker-compose.yml` | T036–T039, T045 (US2); T048–T051 (US3); T101–T102 (Phase 9) |
-| `deploy/README.md` | T044, T054 (US2/US3); T107, T110, T112 (Phase 9) |
+| `deploy/README.md` | T044, T054 (US2/US3); T107, T110, T112 (Phase 9); T138, T140 (Phase 10) |
+| `src/pdf2md/dispatcher.py` (Phase 10) | T121–T125, T128, T131, T137 — one file, one sequence, no `[P]` between them |
 | `src/pdf2md/dispatcher.py` | T026, T027, T033, T092 (US1); T058 (US4); T070–T073 (US5) |
 | `src/pdf2md/static/app.js` | T032, T094 (US1); T062 (US4); T075 (US5) |
 | `src/pdf2md/api/jobs.py` | T030, T031 (US1); T060, T065 (US4); T073, T074, T077 (US5) |
@@ -366,6 +448,29 @@ Task: "Update root README.md"                                     # T109
 
 ---
 
+**Phase 10 splitting** — independent files, safe together:
+
+```text
+Task: "Add pypdf to pyproject.toml"                               # T113
+Task: "Add the six splitting settings to config.py"               # T114
+Task: "Write tests/unit/test_pdfinfo.py"                          # T116
+Task: "Extend tests/contract/test_uploads.py"                     # T118
+Task: "Write tests/integration/test_split.py"                     # T120
+Task: "Extend tests/integration/test_timeout.py"                  # T126
+Task: "Write tests/unit/test_sectioning.py"                       # T129
+Task: "Extend tests/contract/test_jobs.py"                        # T133
+Task: "Extend tests/integration/test_restart_recovery.py"          # T136
+Task: "Document the six variables in deploy/"                     # T138
+Task: "Add --seams to ops/measure-fidelity.py"                    # T139
+```
+
+Everything else in Phase 10 lands in `dispatcher.py`, `storage.py`, or `db.py` and must run
+in sequence. `dispatcher.py` in particular takes eight of the phase's tasks — that file is
+the one the README calls the most failure-sensitive code in the repository, and parallel
+edits to it are how the single-use result guarantee gets broken by accident.
+
+---
+
 ## Implementation Strategy
 
 ### MVP scope
@@ -420,6 +525,9 @@ What remains needs decisions or hardware that a repository edit cannot supply:
 |---|---|
 | T110, T112 | The Mac mini: a Repository-method deploy (O5) and the engine digest check |
 | T111 | The deployed stack, to re-run both isolation scripts |
+| T113–T139 | Nothing — buildable and testable against the stub engine |
+| T140, T141 | The fidelity corpus and the deployed stack, to set `PART_MAX_PAGES` from measurement (O7) and confirm the seam tradeoff (O8) |
+| T142 | The deployed stack, for V13–V16 |
 
 T097, T100, and T102 closed on 2026-08-19: the repository is public,
 `ghcr.io/marrothm/pdf2md-web:1.0.0` is published and pulls with no credential (which

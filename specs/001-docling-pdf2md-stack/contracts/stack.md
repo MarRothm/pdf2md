@@ -73,12 +73,18 @@ volumes:
 | `PDF2MD_INBOX_PATH` | `/data/inbox` | |
 | `PDF2MD_OUTBOX_PATH` | `/data/outbox` | |
 | `PDF2MD_MAX_UPLOAD_BYTES` | `209715200` (200 MB) | Must stay ≤ the engine's `MAX_FILE_SIZE` |
-| `PDF2MD_JOB_TIMEOUT_SECONDS` | `2700` (45 min) | Watchdog; set above the engine's timeout so the engine gives up first |
+| `PDF2MD_JOB_TIMEOUT_SECONDS` | `2700` (45 min) | Watchdog, applied **per part**; a document's ceiling is `part_count ×` this. Set above the engine's per-document timeout so the engine gives up first. Applied per document it would kill every split document (research.md R12) |
 | `PDF2MD_POLL_INTERVAL_SECONDS` | `2` | Engine polling cadence |
 | `PDF2MD_INBOX_RETENTION_HOURS` | `48` | PDF reaping after a job succeeds |
 | `PDF2MD_FAILED_INBOX_RETENTION_DAYS` | `14` | Failed and timed-out jobs keep their source PDF this long so a retry is possible |
 | `PDF2MD_SUSPECT_MIN_CHARS_PER_PAGE` | `50` | Below this yield a conversion reports as suspect rather than plain success (FR-029) |
 | `PDF2MD_JOB_HISTORY_DAYS` | `30` | History pruning; never touches the outbox |
+| `PDF2MD_PART_MAX_PAGES` | `100` | Documents longer than this are split; sized to the engine's *time* ceiling, not its page ceiling. At 10 s/page a part takes ~1000 s against the engine's 2400 s limit. A 2000-page document is then 20 parts, ~2.8 h at two in flight — the 15 h watchdog ceiling is a backstop, not an expectation (research.md R12) |
+| `PDF2MD_MAX_TOTAL_PAGES` | `10000` | Refused at upload above this (FR-036). With `PARTS_IN_FLIGHT` already bounding queue slots, this ceiling mostly bounds **wall-clock time**: 10 000 pages is 100 parts, roughly 14 hours at two in flight. Set it to the longest single document worth occupying the converter for |
+| `PDF2MD_PARTS_IN_FLIGHT` | `2` | Parts of one document in the engine at once, so a long document does not starve short ones |
+| `PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES` | `1048576` | Above this, output is written as section files (FR-033) |
+| `PDF2MD_SECTION_MIN_BYTES` | `16384` | Sections smaller than this merge into the previous one |
+| `PDF2MD_SECTION_MAX_BYTES` | `524288` | Sections larger than this are divided at the next heading level |
 | `PDF2MD_LOG_LEVEL` | `INFO` | Job-level logs viewable in Portainer (FR-019) |
 
 ## Environment — `docling`

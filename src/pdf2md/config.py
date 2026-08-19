@@ -49,6 +49,31 @@ class Settings(BaseSettings):
 
     job_history_days: int = 30
 
+    # --- splitting (FR-033 through FR-037) --------------------------------
+    part_max_pages: int = 100
+    """Documents longer than this are converted in parts (FR-034).
+
+    Sized to the engine's *time* ceiling, not its page ceiling: at 10s/page a part takes
+    ~1000s against DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT of 2400s. A value chosen to sit just
+    under the 2000-page limit would time out instead (research.md R12).
+    """
+
+    max_total_pages: int = 10_000
+    """Refused at upload above this, for its length — never as damaged (FR-036)."""
+
+    parts_in_flight: int = 2
+    """Parts of one document in the engine at once, so a long document cannot starve
+    short ones queued behind it (research.md R14)."""
+
+    section_split_threshold_bytes: int = 1_048_576
+    """Above this much joined Markdown, output is written as section files (FR-033)."""
+
+    section_min_bytes: int = 16_384
+    """Sections below this merge into their predecessor rather than standing alone."""
+
+    section_max_bytes: int = 524_288
+    """Sections above this are divided at the next heading level down."""
+
     # --- operational ------------------------------------------------------
     log_level: str = "INFO"
     dispatcher_enabled: bool = True

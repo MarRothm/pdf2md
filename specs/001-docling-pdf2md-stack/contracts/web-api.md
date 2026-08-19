@@ -52,7 +52,9 @@ Accepts one or more PDFs (FR-008, FR-009).
 }
 ```
 
-**Rejection reasons** (FR-007): not a PDF by magic bytes; larger than `MAX_UPLOAD_BYTES`; zero bytes; password-protected or unreadable structure where detectable at upload time. Rejections never create a job.
+**Rejection reasons** (FR-007, FR-036): not a PDF by magic bytes; larger than `MAX_UPLOAD_BYTES`; zero bytes; password-protected; unreadable page structure; **more pages than `MAX_TOTAL_PAGES`**. Rejections never create a job.
+
+Since the page count is read at upload (research.md R11), the last three are now decided in the moment rather than after a round trip through the engine. A document that is merely long is never described as damaged — it is refused for its length, with what to do about it.
 
 **413** when the whole request body exceeds the server limit. **507** when the outbox or inbox has no space left, with a message naming which.
 
@@ -88,7 +90,10 @@ The list the page polls (FR-010). Returns most recent first.
       "ended_at": null,
       "attempt": 1,
       "size_bytes": 8412233,
-      "page_count": null,
+      "page_count": 2413,
+      "part_count": 25,
+      "parts_completed": 7,
+      "missing_page_ranges": null,
       "failure_reason": null,
       "output_filename": null,
       "download_url": null
@@ -97,7 +102,9 @@ The list the page polls (FR-010). Returns most recent first.
 }
 ```
 
-`status` is the machine vocabulary from [data-model.md](../data-model.md); `display_status` is the user-facing string, so the page never maps states itself — `succeeded_suspect` renders as *Converted — check output* (FR-029). `download_url` is populated for `succeeded`, `succeeded_suspect`, and `already_converted`.
+`status` is the machine vocabulary from [data-model.md](../data-model.md); `display_status` is the user-facing string, so the page never maps states itself — `succeeded_suspect` renders as *Converted — check output* (FR-029), and a split document in progress renders as *Converting — part 7 of 25* (FR-037). `download_url` is populated for `succeeded`, `succeeded_suspect`, `succeeded_incomplete`, and `already_converted`.
+
+`page_count` is known from upload onwards, not only after conversion (FR-036). `part_count` is 1 for a document converted whole, so the page needs no special case: it shows the part counter only when `part_count > 1`. `missing_page_ranges` is non-null only for `succeeded_incomplete`, and carries the ranges whose parts failed — e.g. `[[901, 1000]]` (FR-035).
 
 ---
 
@@ -111,9 +118,20 @@ The list the page polls (FR-010). Returns most recent first.
   "engine_errors": ["Page 14: table structure could not be resolved"],
   "processing_seconds": 96.4,
   "output_bytes": 51233,
-  "content_hash": "4f2a91b0c7d3…"
+  "content_hash": "4f2a91b0c7d3…",
+  "outputs": [
+    { "filename": "manual--4f2a91b0c7d3--001-installation.md",
+      "section_title": "Installation", "bytes": 44120 },
+    { "filename": "manual--4f2a91b0c7d3--002-configuration.md",
+      "section_title": "Configuration", "bytes": 71880 }
+  ]
 }
 ```
+
+`outputs` lists every file this document wrote. It holds one entry for an ordinary
+document and one per section for a document over the section threshold (FR-033), so the
+detail view can show what an operator will actually find in the outbox rather than a
+single name that no longer describes it.
 
 **404** when the job has been pruned from history (`JOB_HISTORY_DAYS`). The Markdown itself remains in the outbox — history pruning never removes output.
 

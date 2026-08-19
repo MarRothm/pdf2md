@@ -89,6 +89,86 @@ SCHEMA: list[tuple[str, str]] = [
         CREATE INDEX idx_output_hash ON markdown_output(content_hash);
         """,
     ),
+    (
+        "002_splitting",
+        """
+        CREATE TABLE conversion_part (
+          id             TEXT PRIMARY KEY,
+          job_id         TEXT NOT NULL REFERENCES conversion_job(id) ON DELETE CASCADE,
+          ordinal        INTEGER NOT NULL,
+          first_page     INTEGER NOT NULL,
+          last_page      INTEGER NOT NULL,
+          part_path      TEXT,
+          status         TEXT NOT NULL,
+          engine_task_id TEXT,
+          markdown       TEXT,
+          failure_reason TEXT,
+          created_at     TEXT NOT NULL,
+          started_at     TEXT,
+          ended_at       TEXT,
+          UNIQUE (job_id, ordinal)
+        );
+
+        CREATE INDEX idx_part_job    ON conversion_part(job_id);
+        CREATE INDEX idx_part_status ON conversion_part(status);
+
+        ALTER TABLE markdown_output ADD COLUMN section_ordinal INTEGER;
+        ALTER TABLE markdown_output ADD COLUMN section_title TEXT;
+
+        ALTER TABLE conversion_job ADD COLUMN part_count INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE conversion_job ADD COLUMN parts_completed INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE conversion_job ADD COLUMN missing_page_ranges TEXT;
+        """,
+    ),
+    (
+        # `succeeded_incomplete` has to join the status CHECK, and SQLite cannot alter a
+        # constraint in place — the table is rebuilt. Existing history is copied across
+        # rather than dropped, because job history survives a redeploy (FR-017).
+        "003_incomplete_status",
+        """
+        PRAGMA foreign_keys=OFF;
+
+        CREATE TABLE conversion_job_rebuilt (
+          id                  TEXT PRIMARY KEY,
+          batch_id            TEXT REFERENCES batch(id) ON DELETE SET NULL,
+          content_hash        TEXT NOT NULL REFERENCES source_document(content_hash),
+          submitted_filename  TEXT NOT NULL,
+          status              TEXT NOT NULL CHECK (status IN
+                                ('queued','submitted','running','succeeded','succeeded_suspect',
+                                 'succeeded_incomplete','already_converted','failed','timed_out')),
+          engine_task_id      TEXT,
+          queue_position      INTEGER,
+          created_at          TEXT NOT NULL,
+          updated_at          TEXT NOT NULL,
+          started_at          TEXT,
+          ended_at            TEXT,
+          attempt             INTEGER NOT NULL DEFAULT 1,
+          failure_reason      TEXT,
+          engine_errors       TEXT,
+          output_filename     TEXT REFERENCES markdown_output(output_filename),
+          part_count          INTEGER NOT NULL DEFAULT 1,
+          parts_completed     INTEGER NOT NULL DEFAULT 0,
+          missing_page_ranges TEXT
+        );
+
+        INSERT INTO conversion_job_rebuilt
+          SELECT id, batch_id, content_hash, submitted_filename, status, engine_task_id,
+                 queue_position, created_at, updated_at, started_at, ended_at, attempt,
+                 failure_reason, engine_errors, output_filename, part_count,
+                 parts_completed, missing_page_ranges
+          FROM conversion_job;
+
+        DROP TABLE conversion_job;
+        ALTER TABLE conversion_job_rebuilt RENAME TO conversion_job;
+
+        CREATE INDEX idx_job_status  ON conversion_job(status);
+        CREATE INDEX idx_job_created ON conversion_job(created_at DESC);
+        CREATE INDEX idx_job_batch   ON conversion_job(batch_id);
+        CREATE INDEX idx_job_updated ON conversion_job(updated_at DESC);
+
+        PRAGMA foreign_keys=ON;
+        """,
+    ),
 ]
 
 
@@ -176,16 +256,19 @@ class Database:
         original_filename: str,
         size_bytes: int,
         inbox_path: str | None,
+        page_count: int | None = None,
     ) -> SourceDocument:
         """Converge identical bytes on one document, keeping the first filename seen."""
         with self.connection() as conn:
             conn.execute(
                 "INSERT INTO source_document"
-                " (content_hash, original_filename, size_bytes, first_seen_at, inbox_path)"
-                " VALUES (?, ?, ?, ?, ?)"
+                " (content_hash, original_filename, size_bytes, page_count, first_seen_at,"
+                "  inbox_path)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(content_hash) DO UPDATE SET"
-                "   inbox_path = COALESCE(excluded.inbox_path, source_document.inbox_path)",
-                (content_hash, original_filename, size_bytes, now_iso(), inbox_path),
+                "   inbox_path = COALESCE(excluded.inbox_path, source_document.inbox_path),"
+                "   page_count = COALESCE(excluded.page_count, source_document.page_count)",
+                (content_hash, original_filename, size_bytes, page_count, now_iso(), inbox_path),
             )
         document = self.get_source_document(content_hash)
         assert document is not None

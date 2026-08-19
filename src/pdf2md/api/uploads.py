@@ -14,6 +14,11 @@ from pdf2md.config import Settings
 from pdf2md.dispatcher import claim_already_converted
 from pdf2md.logging_config import log_job
 from pdf2md.models import AcceptedUpload, JobStatus, RejectedUpload, UploadResponse
+from pdf2md.pdfinfo import (
+    EncryptedPdfError,
+    UnreadablePdfError,
+    page_count,
+)
 from pdf2md.storage import OutOfSpaceError, Storage
 
 logger = logging.getLogger(__name__)
@@ -58,10 +63,18 @@ async def create_upload(
             logger.info('upload_rejected file="%s" reason="%s"', filename, rejection.reason)
             continue
 
+        try:
+            pages = _inspect_pages(storage.inbox_file(content_hash), filename, settings)
+        except Rejection as rejection:
+            rejected.append(RejectedUpload(filename=filename, reason=rejection.reason))
+            logger.info('upload_rejected file="%s" reason="%s"', filename, rejection.reason)
+            continue
+
         db.upsert_source_document(
             content_hash=content_hash,
             original_filename=filename,
             size_bytes=size_bytes,
+            page_count=pages,
             inbox_path=str(storage.inbox_file(content_hash)),
         )
         job = db.create_job(
@@ -126,6 +139,36 @@ async def _store_upload(
     content_hash = digest.hexdigest()
     storage.commit_inbox_file(temp_path, content_hash)
     return content_hash, size
+
+
+def _inspect_pages(path: Path, filename: str, settings: Settings) -> int:
+    """Read the page count and decide the document's fate here, not forty minutes later.
+
+    Every refusal below used to arrive as a conversion failure, and one of them arrived
+    wearing the wrong reason entirely: a document over the engine's page ceiling was
+    reported as probably damaged. Reading the page tree at upload is what lets each of
+    these say the true thing immediately (FR-007, FR-036).
+    """
+    try:
+        pages = page_count(path)
+    except EncryptedPdfError as error:
+        raise Rejection(
+            f'"{filename}" is password-protected, so its contents cannot be read. '
+            "Remove the password and upload it again."
+        ) from error
+    except UnreadablePdfError as error:
+        raise Rejection(
+            f'"{filename}" could not be read — the file looks damaged or incomplete. '
+            "Try re-saving or re-exporting it, then upload it again."
+        ) from error
+
+    if pages > settings.max_total_pages:
+        raise Rejection(
+            f'"{filename}" has {pages:,} pages, more than the {settings.max_total_pages:,} '
+            "this converter accepts in one document. Split it into smaller files and "
+            "upload those."
+        )
+    return pages
 
 
 def _validate(filename: str, head: bytes, tail: bytes, size: int) -> None:
