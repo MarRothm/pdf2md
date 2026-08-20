@@ -273,6 +273,22 @@ class DeletionResult(BaseModel):
     upload_discarded: bool
 
 
+class SkippedDocument(BaseModel):
+    filename: str
+    reason: str
+
+
+class BulkDeletionResult(BaseModel):
+    """What `DELETE /api/jobs` removed. Irreversible (feature 002, FR-027)."""
+
+    documents_deleted: int
+    job_ids: list[str]
+    removed_files: list[str]
+    kept_files: list[str]
+    skipped: list[SkippedDocument] = []
+    """Documents the engine was converting. Nothing of theirs was touched."""
+
+
 class RetryResponse(BaseModel):
     job_id: str
     status: JobStatus

@@ -63,6 +63,37 @@ operator that nothing will be removed while removing every section file of the d
 
 ---
 
+## `DELETE /api/jobs`
+
+Removes **every** document: every entry, every Markdown file, every retained upload (FR-027).
+Irreversible, and it takes successful conversions with it — the Markdown in the outbox belongs
+to the documents being deleted.
+
+No request body. The confirmation is the page's responsibility, and it must say that successful
+conversions go too.
+
+**200**
+
+```json
+{
+  "documents_deleted": 2,
+  "job_ids": ["3ab…", "9de…"],
+  "removed_files": ["one--4f2a.md", "two--91b0.md"],
+  "kept_files": [],
+  "skipped": [
+    { "filename": "in-progress.pdf", "reason": "being converted right now — nothing of it was removed" }
+  ]
+}
+```
+
+A document the engine is converting is **skipped**, not refused: one busy conversion must not
+prevent clearing everything else, and must not be destroyed either. Everything else follows the
+single-document rules — files before rows, only recorded outputs, a missing file is not a failure.
+
+An empty list returns `documents_deleted: 0` and changes nothing.
+
+---
+
 ## `DELETE /api/jobs/{job_id}`
 
 Deletes the source document this conversion belongs to: every conversion of it, every Markdown

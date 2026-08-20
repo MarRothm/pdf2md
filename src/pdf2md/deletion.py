@@ -18,7 +18,13 @@ from __future__ import annotations
 import logging
 
 from pdf2md.db import Database
-from pdf2md.models import CONVERTING_STATUSES, ConversionJob, DeletionResult
+from pdf2md.models import (
+    CONVERTING_STATUSES,
+    BulkDeletionResult,
+    ConversionJob,
+    DeletionResult,
+    SkippedDocument,
+)
 from pdf2md.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -45,36 +51,100 @@ def delete_document(db: Database, storage: Storage, job_id: str) -> DeletionResu
     siblings = db.jobs_for_hash(job.content_hash)
     _refuse_if_converting(job, siblings)
 
-    # Only names this service recorded as its own output. Never a directory scan, never a
-    # path from the request (INV-2).
-    output_filenames = [output.output_filename for output in db.outputs_for_hash(job.content_hash)]
-
-    removed, kept = storage.delete_outbox_files(output_filenames)
-
-    upload_discarded = storage.has_inbox_file(job.content_hash)
-    storage.delete_inbox_file(job.content_hash)
-    storage.delete_part_files(job.content_hash)
-
-    job_ids = db.delete_document_rows(job.content_hash)
+    result = _delete_one(db, storage, job.content_hash, job.submitted_filename)
 
     logger.info(
         'document_deleted file="%s" content_hash=%s jobs=%d removed=%d kept=%s upload=%s',
         job.submitted_filename,
         job.content_hash[:12],
-        len(job_ids),
-        len(removed),
-        ",".join(kept) or "-",
-        "discarded" if upload_discarded else "already gone",
+        len(result.job_ids),
+        len(result.removed_files),
+        ",".join(result.kept_files) or "-",
+        "discarded" if result.upload_discarded else "already gone",
     )
+    return result
+
+
+def _delete_one(db: Database, storage: Storage, content_hash: str, filename: str) -> DeletionResult:
+    """Files first, then rows, for one document. The order is the durability rule (R7)."""
+    # Only names this service recorded as its own output. Never a directory scan, never a
+    # path from the request (INV-2).
+    output_filenames = [output.output_filename for output in db.outputs_for_hash(content_hash)]
+
+    removed, kept = storage.delete_outbox_files(output_filenames)
+
+    upload_discarded = storage.has_inbox_file(content_hash)
+    storage.delete_inbox_file(content_hash)
+    storage.delete_part_files(content_hash)
+
+    job_ids = db.delete_document_rows(content_hash)
+
     for name in kept:
-        logger.warning('output_not_removed file="%s" content_hash=%s', name, job.content_hash[:12])
+        logger.warning('output_not_removed file="%s" content_hash=%s', name, content_hash[:12])
 
     return DeletionResult(
         job_ids=job_ids,
-        filename=job.submitted_filename,
+        filename=filename,
         removed_files=removed,
         kept_files=kept,
         upload_discarded=upload_discarded,
+    )
+
+
+def delete_everything(db: Database, storage: Storage) -> BulkDeletionResult:
+    """Remove every document, every entry, every output file, and every retained upload.
+
+    The clean slate an operator asks for when the list has filled with failed and abandoned
+    attempts. Irreversible, and it takes successful conversions with it: the Markdown in the
+    outbox belongs to the documents being deleted (FR-027).
+
+    A document the engine is converting is skipped rather than deleted, and named in the
+    result — the same rule as a single deletion, applied per document so that one busy
+    conversion does not block clearing everything else.
+    """
+    deleted = 0
+    job_ids: list[str] = []
+    removed: list[str] = []
+    kept: list[str] = []
+    skipped: list[SkippedDocument] = []
+
+    for content_hash in db.all_content_hashes():
+        jobs = db.jobs_for_hash(content_hash)
+        if not jobs:
+            # A document whose jobs were pruned. Its rows still go; its files are named by
+            # markdown_output, so they are still reachable without scanning the outbox.
+            outcome = _delete_one(db, storage, content_hash, filename="(no longer listed)")
+        else:
+            busy = next((job for job in jobs if job.status in CONVERTING_STATUSES), None)
+            if busy is not None:
+                skipped.append(
+                    SkippedDocument(
+                        filename=busy.submitted_filename,
+                        reason="being converted right now — nothing of it was removed",
+                    )
+                )
+                continue
+            outcome = _delete_one(db, storage, content_hash, jobs[0].submitted_filename)
+
+        deleted += 1
+        job_ids.extend(outcome.job_ids)
+        removed.extend(outcome.removed_files)
+        kept.extend(outcome.kept_files)
+
+    logger.warning(
+        "everything_deleted documents=%d jobs=%d removed=%d kept=%d skipped=%d",
+        deleted,
+        len(job_ids),
+        len(removed),
+        len(kept),
+        len(skipped),
+    )
+    return BulkDeletionResult(
+        documents_deleted=deleted,
+        job_ids=job_ids,
+        removed_files=removed,
+        kept_files=kept,
+        skipped=skipped,
     )
 
 

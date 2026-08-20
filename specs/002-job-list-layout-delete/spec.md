@@ -118,7 +118,8 @@ Requirement identifiers below are scoped to this specification.
 - **FR-023**: After a document has been deleted, uploading the same PDF again MUST start a fresh conversion and MUST NOT report it as already converted.
 - **FR-024**: The system MUST record every deletion in its operational log, naming the document and the files removed, so the output folder's contents can be reconciled afterwards.
 - **FR-025**: The count of documents in the output folder shown on the page MUST reflect a completed deletion without requiring a page reload.
-- **FR-026**: Deletion MUST operate on one conversion at a time, initiated from that conversion's own row. Multi-selection, whole-batch deletion, and any "delete everything finished" action are out of scope, so that every confirmation names exactly one document.
+- **FR-026**: Deleting a single conversion MUST operate on one conversion at a time, initiated from that conversion's own row, so that its confirmation names exactly one document. Multi-selection and whole-batch deletion remain out of scope.
+- **FR-027**: Operators MUST be able to clear the entire list in one action. The confirmation MUST state how many entries and documents will go, MUST state plainly that successful conversions and their Markdown are removed as well — not only the failures — and MUST state that it cannot be undone. A document the converter is working on MUST be left untouched and named in the outcome, rather than blocking the clear. *(Supersedes the original scope of FR-026, which excluded any "delete everything" action; requested 2026-08-20 after a list of abandoned attempts proved unclearable one row at a time.)*
 
 ### Key Entities
 
@@ -141,6 +142,7 @@ Requirement identifiers below are scoped to this specification.
 - **SC-008**: No deletion removes any file belonging to a different document or any file this service did not write — verified including the case of the same document converted twice, where both entries are expected to go together.
 - **SC-009**: Re-uploading a deleted document produces a real conversion on the first attempt, 100% of the time.
 - **SC-010**: Operators stop removing files from the output folder by hand to clean up bad conversions.
+- **SC-011**: A list of any size can be returned to empty in two actions, and every conversion the converter was not working on is gone from both the list and the output folder afterwards.
 
 ## Assumptions
 

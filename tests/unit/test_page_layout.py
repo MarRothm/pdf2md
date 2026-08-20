@@ -158,14 +158,28 @@ def test_the_detail_view_lists_the_documents_files_not_only_this_jobs():
     assert "document_outputs" in js
 
 
-def test_a_delete_is_never_issued_without_a_confirmation():
-    """X1: the page has exactly one DELETE, inside the function the confirm button calls."""
-    js = _code("app.js")
-    assert js.count('method: "DELETE"') == 1
+# Only these are reached from a confirmation dialog's own button. A DELETE issued from
+# anywhere else is a delete the operator never agreed to.
+CONFIRMED_DELETERS = {"performDelete", "performClearAll"}
 
-    before = js[: js.index('method: "DELETE"')]
-    enclosing = re.findall(r"function (\w+)", before)[-1]
-    assert enclosing == "performDelete"
+
+def test_no_delete_is_issued_outside_a_confirmed_path():
+    """X1: every DELETE the page makes sits inside a function a confirm button calls."""
+    js = _code("app.js")
+    calls = [match.start() for match in re.finditer(r'method: "DELETE"', js)]
+    assert calls, "the page issues no DELETE at all"
+
+    for position in calls:
+        enclosing = re.findall(r"function (\w+)", js[:position])[-1]
+        assert enclosing in CONFIRMED_DELETERS, (
+            f"a DELETE is issued from {enclosing}(), which is not a confirmed path"
+        )
+
+
+def test_clearing_the_list_states_that_successful_conversions_go_too():
+    """The wipe deletes Markdown from the outbox, which is the part worth being sure of."""
+    js = _code("app.js")
+    assert "successful conversions go too" in js
 
 
 def test_the_entry_count_comes_from_a_filtered_query_not_the_loaded_rows():

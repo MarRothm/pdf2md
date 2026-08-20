@@ -130,3 +130,47 @@ async def test_a_conversion_that_produced_nothing_still_deletes(convert, client,
     body = (await client.delete(f"/api/jobs/{job_id}")).json()
     assert body["removed_files"] == []
     assert body["job_ids"] == [job_id]
+
+
+# --- DELETE the whole list --------------------------------------------------
+
+
+async def test_deleting_everything_clears_the_list_and_the_outbox(convert, client, storage):
+    await convert(("one.pdf", pdf_bytes(b"1")))
+    await convert(("two.pdf", pdf_bytes(b"2")))
+    assert len(list(storage.outbox_path.glob("*.md"))) == 2
+
+    body = (await client.delete("/api/jobs")).json()
+
+    assert body["documents_deleted"] == 2
+    assert len(body["job_ids"]) == 2
+    assert len(body["removed_files"]) == 2
+    assert body["kept_files"] == []
+    assert body["skipped"] == []
+    assert (await client.get("/api/jobs")).json()["jobs"] == []
+    assert list(storage.outbox_path.glob("*.md")) == []
+    assert list(storage.inbox_path.glob("*.pdf")) == []
+
+
+async def test_deleting_everything_on_an_empty_list_is_harmless(client):
+    body = (await client.delete("/api/jobs")).json()
+    assert body["documents_deleted"] == 0
+    assert body["job_ids"] == []
+
+
+async def test_deleting_everything_skips_what_the_engine_is_converting(
+    convert, upload, client, db, storage
+):
+    """One busy conversion must not block clearing everything else, nor be destroyed."""
+    await convert(("done.pdf", pdf_bytes(b"done")))
+    busy = (await upload(("busy.pdf", pdf_bytes(b"busy")))).json()["accepted"][0]["job_id"]
+    db.mark_submitted(busy, "task-1", 0)
+
+    body = (await client.delete("/api/jobs")).json()
+
+    assert body["documents_deleted"] == 1
+    assert [entry["filename"] for entry in body["skipped"]] == ["busy.pdf"]
+
+    remaining = (await client.get("/api/jobs")).json()["jobs"]
+    assert [job["filename"] for job in remaining] == ["busy.pdf"]
+    assert list(storage.outbox_path.glob("*.md")) == []

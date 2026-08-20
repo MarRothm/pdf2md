@@ -273,3 +273,8 @@ button.danger { border-color: var(--bad); background: var(--bad); }
 }
 .outcome { margin-top: 0.75rem; font-size: 0.9rem; }
 .outcome.bad { color: var(--bad); }
+
+/* --- clear the list (feature 002, FR-027) --------------------------------- */
+.head-right { display: flex; align-items: baseline; gap: 1rem; }
+button.danger-text { border-color: transparent; color: var(--bad); }
+.confirm .count { font-weight: 600; }

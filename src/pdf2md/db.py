@@ -832,6 +832,14 @@ class Database:
             conn.execute("DELETE FROM source_document WHERE content_hash = ?", (content_hash,))
         return job_ids
 
+    def all_content_hashes(self) -> list[str]:
+        """Every document the registry knows about, newest first (feature 002, FR-027)."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT content_hash FROM source_document ORDER BY first_seen_at DESC"
+            ).fetchall()
+        return [row["content_hash"] for row in rows]
+
     # --- retention --------------------------------------------------------
 
     def prune_history(self, before: str) -> int:
