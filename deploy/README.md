@@ -94,7 +94,8 @@ Open `http://<mac-mini-ip>:8080` from any machine on the LAN.
 
 All from Portainer → Stacks → `pdf2md`:
 
-- **Redeploy** after a change in the repository: *Pull and redeploy*. Because both images
+- **Redeploy** after a change in the repository — including a release, which pins a new
+  web image on `main`: *Pull and redeploy*. Because both images
   are pinned by digest and the compose file sets `pull_policy: missing`, an unchanged
   version costs no download — only an intentional version bump pulls anything.
 - **Stop / Start** from the stack's controls.
@@ -111,8 +112,7 @@ the outbox directory, never in container layers (FR-017).
 
 Code on `main` is not deployable by itself. The stack pins an image by digest, so a change
 only reaches the Mac mini once it has been built into an image and that image's digest has
-been pinned. Four steps, and it is always **two commits** — the digest cannot be written
-down until the image it names exists.
+been pinned. You do two things; the workflow does the rest.
 
 ```bash
 # 1. Bump the version and push it. The version lives in exactly one place;
@@ -124,16 +124,28 @@ git commit -am "Bump to 1.3.0" && git push
 git tag v1.3.0 && git push origin v1.3.0
 ```
 
-**3.** When the workflow finishes it prints the full image reference in its job summary.
-Confirm it pulls with no credential, which is also how you check the package stayed public:
+**3.** That is the last thing you type. The workflow builds the image, pushes it to GHCR,
+writes the digest it just published into `deploy/docker-compose.yml`, and commits that pin
+to `main` itself — so the digest is never transcribed by hand and the stack file always
+points at the newest release. The job summary shows the full reference.
+
+**4.** **Pull and redeploy** in Portainer. Portainer reads the stack file from `main`, so
+the redeploy picks up the pin the workflow wrote.
+
+Nothing deploys itself: GitOps updates stay off, and the redeploy is still a decision a
+person makes. What the workflow removed is the transcription, not the decision.
+
+Worth confirming after a release that the package stayed public — this is what a host with
+no credential does:
 
 ```bash
-docker logout ghcr.io && docker pull ghcr.io/marrothm/pdf2md-web:1.2.0
-docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/marrothm/pdf2md-web:1.2.0
+docker logout ghcr.io && docker pull ghcr.io/marrothm/pdf2md-web:1.3.0
 ```
 
-**4.** Pin that digest in `deploy/docker-compose.yml` and `deploy/.env.example`, commit,
-push — then **Pull and redeploy** in Portainer.
+The digest lives in exactly one place. `deploy/.env.example` documents `WEB_IMAGE` and
+`ENGINE_IMAGE` as deliberate overrides and deliberately carries no digest of its own; a
+value there would be a stale second copy that silently outranks the stack file. A unit
+test fails if one reappears.
 
 Only the web image moves this way. The engine is upstream and pinned separately; upgrading
 it is a bigger decision because it changes layout analysis (§10).

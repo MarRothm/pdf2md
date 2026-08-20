@@ -67,3 +67,22 @@ def test_images_are_pinned_by_digest() -> None:
             f"{name} is pinned by tag alone; a tag can be re-pointed upstream, so the "
             f"digest is the actual pin (FR-032)"
         )
+
+
+def test_the_env_example_carries_no_second_copy_of_a_digest() -> None:
+    """The stack file is the only place a digest is written down.
+
+    `.env.example` used to carry its own copy of both image references, so a release had
+    to transcribe the same 71-character digest twice with nothing checking that the two
+    agreed. The variables remain documented there as deliberate overrides, commented out.
+    """
+    env_example = COMPOSE_PATH.parent / ".env.example"
+    offenders = [
+        line.strip()
+        for line in env_example.read_text().splitlines()
+        if "sha256:" in line and not line.lstrip().startswith("#")
+    ]
+    assert offenders == [], (
+        "an image digest in .env.example is a copy that nothing keeps current, and it "
+        "overrides the pin the repository maintains"
+    )

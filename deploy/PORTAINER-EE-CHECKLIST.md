@@ -101,7 +101,10 @@ Add the two required ones. Everything else has a working default — see
 - [ ] Nothing else overridden on a first deploy. Tune `DOCLING_WORKERS`,
       `DOCLING_MEM_LIMIT`, and `OMP_NUM_THREADS` after you have measured a real batch
       (Part 8), not before.
-- [ ] `ENGINE_IMAGE` and `WEB_IMAGE` **not** overridden. Overriding them deploys something
+- [ ] `ENGINE_IMAGE` and `WEB_IMAGE` **not** set here at all. They are commented out in
+      `.env.example` for this reason: the stack file is the only place a digest is written
+      down, and `publish.yml` keeps the web one current on every release. A value here is a
+      copy that goes stale and silently wins. Overriding them deploys something
       other than what the repository pins, which is exactly what the digests are for.
 
 ## Part 5 — The options whose defaults are wrong here

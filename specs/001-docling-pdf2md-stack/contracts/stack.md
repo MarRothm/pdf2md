@@ -29,6 +29,12 @@ Both carry `pull_policy: missing` and `restart: unless-stopped` (FR-016).
 
 Both images are pinned by tag **and** digest. The digest is what makes the pin real — a tag can be re-pointed upstream, a digest cannot (FR-032). `pull_policy: missing` then means a redeploy reuses the local image when the digest already matches, so only an intentional version change costs a download.
 
+**One digest, one place.** `deploy/docker-compose.yml` is the only file in which either digest is written down, and `.github/workflows/publish.yml` writes the web one itself: on a `v*` tag it builds the image, pushes it, rewrites the pin, and commits that to `main`. A redeploy therefore always deploys the newest published release without anyone transcribing a digest.
+
+`deploy/.env.example` previously carried its own copy of both references, which made a release transcribe the same 71-character string into two files with nothing checking that they agreed — and a value in the environment silently outranks the stack file, so a stale copy there would quietly pin the deployment backwards. The two variables remain documented as deliberate overrides, commented out, and `tests/unit/test_compose_pins.py` fails if a digest reappears there.
+
+This does not weaken FR-032. The image is still pinned by digest, still never `latest`, and nothing redeploys itself: GitOps updates stay off and a person still triggers *Pull and redeploy*. What became automatic is the recording of what was built, not the decision to deploy it.
+
 ## Networks
 
 ```yaml

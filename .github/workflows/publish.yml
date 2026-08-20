@@ -1,6 +1,11 @@
-# Builds the web image and publishes it to GHCR. Triggered only by a `v*` tag, never by
-# an ordinary commit: the deployed version changes when someone decides it should, not
-# when someone merges (FR-032, research.md R10).
+# Builds the web image, publishes it to GHCR, and pins its digest in the stack file.
+# Triggered only by a `v*` tag, never by an ordinary commit: the deployed version changes
+# when someone decides it should, not when someone merges (FR-032, research.md R10).
+#
+# The pin commit is the *record* of what was built, not a deployment. Nothing redeploys
+# itself — GitOps updates stay off, and a person still clicks "Pull and redeploy". What
+# this removes is the hand-copying of a 71-character digest into the stack file, which was
+# the one step of a release that could silently go wrong.
 #
 # The runner is `ubuntu-24.04-arm` — a native arm64 build for an arm64-only target, free
 # for public repositories. Those runner labels do not work in private repositories, so
@@ -15,11 +20,16 @@ jobs:
   publish:
     runs-on: ubuntu-24.04-arm
     permissions:
-      contents: read
+      contents: write  # pins the published digest in deploy/docker-compose.yml
       packages: write
 
     steps:
+      # The pin is committed to `main`, not to the tag, so check out the branch rather
+      # than the detached tag ref.
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       # The owner is `MarRothm`, but OCI repository names must be lowercase — passing
       # `github.repository_owner` through unchanged makes the reference invalid and the
@@ -55,21 +65,67 @@ jobs:
           tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
           provenance: false
 
-      # The digest is what goes into deploy/docker-compose.yml. Printing it in the job
-      # summary means the operator does not have to go looking for it.
-      - name: Record the digest for the stack file
+      # The stack file is the single place the digest lives. Writing it here is what makes
+      # a release one decision (tag it) instead of one decision plus a transcription.
+      - name: Pin the digest in the stack file
+        id: pin
         run: |
           image="${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}"
+          reference="${image}@${{ steps.build.outputs.digest }}"
+
+          before=$(grep -c 'pdf2md-web:' deploy/docker-compose.yml)
+          if [ "$before" -ne 1 ]; then
+            echo "expected exactly one web image reference, found ${before}" >&2
+            exit 1
+          fi
+
+          python3 - "$reference" <<'EOF'
+          import re
+          import sys
+          from pathlib import Path
+
+          reference = sys.argv[1]
+          path = Path("deploy/docker-compose.yml")
+          text = path.read_text()
+          pattern = r"ghcr\.io/[^/]+/pdf2md-web:[^}\s]+"
+          if not re.search(pattern, text):
+              sys.exit("no web image reference found in the stack file")
+          # Identical text is fine: re-running a published tag simply has nothing to commit.
+          path.write_text(re.sub(pattern, reference, text, count=1))
+          EOF
+
+          echo "reference=${reference}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the pin
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- deploy/docker-compose.yml; then
+            echo "already pinned to this digest; nothing to commit"
+            exit 0
+          fi
+          git add deploy/docker-compose.yml
+          git commit -m "Pin the ${{ steps.image.outputs.version }} web image" \
+                     -m "Written by .github/workflows/publish.yml from the digest it just published. Deploy it with Pull and redeploy in Portainer."
+          # main may have moved while the image was building.
+          git pull --rebase origin main
+          git push origin main
+
+      - name: Say what to do next
+        run: |
           {
-            echo "### Pin this in \`deploy/docker-compose.yml\`"
+            echo "### Published and pinned"
             echo
             echo '```'
-            echo "${image}@${{ steps.build.outputs.digest }}"
+            echo "${{ steps.pin.outputs.reference }}"
             echo '```'
             echo
-            echo "Then verify it pulls with no credential:"
+            echo "\`deploy/docker-compose.yml\` on \`main\` now points at it."
+            echo "**Pull and redeploy** in Portainer to deploy it."
+            echo
+            echo "Verify it pulls with no credential:"
             echo
             echo '```'
-            echo "docker logout ghcr.io && docker pull ${image}"
+            echo "docker logout ghcr.io && docker pull ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
