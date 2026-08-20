@@ -108,7 +108,14 @@ button[disabled] { opacity: 0.5; cursor: default; }
   font-size: 0.9rem;
 }
 
-table.jobs { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+/* Fixed layout: widths come from the header row, never from the content. One long
+   failure reason used to set the width of the whole table (feature 002, FR-001). */
+table.jobs {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
 table.jobs th {
   text-align: left;
   font-weight: 600;
@@ -116,10 +123,19 @@ table.jobs th {
   border-bottom: 1px solid var(--line);
   padding: 0.4rem 0.5rem;
 }
-table.jobs td { border-bottom: 1px solid var(--line); padding: 0.55rem 0.5rem; vertical-align: top; }
-table.jobs td.file { word-break: break-word; }
+table.jobs td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.55rem 0.5rem;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
 
-.state { font-weight: 600; white-space: nowrap; }
+table.jobs th:nth-child(1), table.jobs td:nth-child(1) { width: 30%; }
+table.jobs th:nth-child(2), table.jobs td:nth-child(2) { width: 15%; }
+table.jobs th:nth-child(3), table.jobs td:nth-child(3) { width: 40%; }
+table.jobs th:nth-child(4), table.jobs td:nth-child(4) { width: 15%; }
+
+.state { font-weight: 600; }
 .state-queued, .state-submitted, .state-running { color: var(--accent); }
 .state-succeeded { color: var(--ok); }
 .state-already_converted { color: var(--ok); }
@@ -131,9 +147,117 @@ table.jobs td.file { word-break: break-word; }
 .detail.reason { color: var(--bad); }
 .detail.caution { color: var(--warn); }
 
+/* Three lines, then cut. The unprefixed property is emitted beside the -webkit- form so
+   the rule survives the prefix being dropped (research.md R2). */
+.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+button.more {
+  display: block;
+  margin-top: 0.25rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  text-decoration: underline;
+}
+
+button.more[disabled] { color: var(--muted); text-decoration: none; }
+
+td.actions { display: flex; flex-direction: column; gap: 0.3rem; align-items: flex-start; }
+td.actions button, td.actions a {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+}
+td.actions button[disabled] { color: var(--muted); cursor: default; opacity: 1; }
+td.actions button.delete { color: var(--bad); }
+td.actions button.delete[disabled] { color: var(--muted); }
+
 .progress { color: var(--muted); font-size: 0.85rem; }
 .empty { color: var(--muted); font-size: 0.9rem; }
 
 a.download { color: var(--accent); }
 
 .foot { max-width: 68rem; margin: 0 auto; padding: 0 1.5rem 2rem; color: var(--muted); font-size: 0.85rem; }
+
+/* --- dialogs (feature 002) ------------------------------------------------
+   One <dialog> reused by the detail view and the delete confirmation. showModal()
+   gives Escape, the focus trap, and focus return to the opener for free. */
+dialog {
+  width: min(42rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+dialog::backdrop { background: rgb(28 32 36 / 45%); }
+
+.modal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.modal-head h2 {
+  font-size: 1.05rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--accent);
+  padding: 0.3rem 0.7rem;
+}
+
+button.danger { border-color: var(--bad); background: var(--bad); }
+
+/* --- delete confirmation (feature 002) ------------------------------------ */
+.confirm p { margin: 0 0 0.75rem; }
+.confirm .warn { color: var(--bad); font-weight: 600; }
+.confirm ul {
+  margin: 0 0 0.75rem;
+  padding-left: 1.1rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.confirm li { overflow-wrap: anywhere; }
+.confirm .choices { display: flex; gap: 0.75rem; margin-top: 1rem; }
+
+/* --- detail view (feature 002) -------------------------------------------- */
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem; margin: 0; font-size: 0.9rem; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.full-message { margin: 0 0 1rem; overflow-wrap: anywhere; }
+.full-message.reason { color: var(--bad); }
+.detail-files { margin: 1rem 0 0; padding-left: 1.1rem; font-size: 0.9rem; }
+.detail-files li { overflow-wrap: anywhere; }
+.engine-errors {
+  margin: 1rem 0 0;
+  padding: 0.5rem 0.7rem;
+  background: #fdf2f2;
+  border-left: 3px solid var(--bad);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.outcome { margin-top: 0.75rem; font-size: 0.9rem; }
+.outcome.bad { color: var(--bad); }

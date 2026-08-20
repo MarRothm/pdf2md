@@ -209,6 +209,8 @@ class JobSummary(BaseModel):
     job_id: str
     batch_id: str | None
     filename: str
+    content_hash: str
+    """Two rows sharing this are two conversions of one PDF; they are deleted together."""
     status: JobStatus
     display_status: str
     queue_position: int | None
@@ -240,15 +242,35 @@ class JobDetail(JobSummary):
     engine_errors: list[str] | None = None
     processing_seconds: float | None = None
     output_bytes: int | None = None
-    content_hash: str
     outputs: list[OutputFile] = []
-    """Every file this document wrote — one, or one per section (FR-033)."""
+    """The files *this job* wrote — one, or one per section (FR-033)."""
+    document_outputs: list[OutputFile] = []
+    """Every file recorded for the document, whichever job wrote it.
+
+    Differs from `outputs` for an `already_converted` job, whose output rows carry the
+    original converter's id. A delete confirmation built from `outputs` would promise to
+    remove nothing while removing every section file (feature 002, FR-017).
+    """
+    retained_upload: bool = False
+    """Whether the uploaded PDF is still on the server and would be discarded with it."""
 
 
 class JobListResponse(BaseModel):
     server_time: str
     backlog: Backlog
     jobs: list[JobSummary]
+
+
+class DeletionResult(BaseModel):
+    """What `DELETE /api/jobs/{job_id}` actually removed (feature 002)."""
+
+    job_ids: list[str]
+    """Every list entry removed, not only the one addressed."""
+    filename: str
+    removed_files: list[str]
+    kept_files: list[str]
+    """Files that could not be unlinked. Empty on a clean deletion (FR-018)."""
+    upload_discarded: bool
 
 
 class RetryResponse(BaseModel):

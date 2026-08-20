@@ -48,7 +48,7 @@
           <th scope="col">Document</th>
           <th scope="col">Status</th>
           <th scope="col">Detail</th>
-          <th scope="col">Markdown</th>
+          <th scope="col">Actions</th>
         </tr>
       </thead>
       <tbody id="job-rows"></tbody>
@@ -56,6 +56,14 @@
     <p id="empty" class="empty">Nothing submitted yet.</p>
   </section>
 </main>
+
+<dialog id="modal" aria-labelledby="modal-title">
+  <div class="modal-head">
+    <h2 id="modal-title"></h2>
+    <button type="button" class="ghost" data-close>Close</button>
+  </div>
+  <div id="modal-body"></div>
+</dialog>
 
 <footer class="foot">
   <p>Converted files are also written to the outbox folder on this machine for import into

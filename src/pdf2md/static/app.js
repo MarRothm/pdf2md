@@ -9,6 +9,7 @@ const state = {
   since: null,          // server_time of the last list response, for cheap polling
   selection: [],        // files chosen but not yet submitted
   batchId: null,        // the upload being watched, for aggregate progress
+  openDetailJobId: null, // the job whose detail dialog is open, so the poll can refresh it
 };
 
 const el = {
@@ -23,7 +24,35 @@ const el = {
   rows: document.getElementById("job-rows"),
   empty: document.getElementById("empty"),
   health: document.getElementById("health"),
+  modal: document.getElementById("modal"),
+  modalTitle: document.getElementById("modal-title"),
+  modalBody: document.getElementById("modal-body"),
 };
+
+// --- modal ----------------------------------------------------------------
+// showModal() traps focus, closes on Escape, and returns focus to whatever was
+// focused when it opened. Nothing here re-implements any of that.
+
+function openModal(title, body) {
+  el.modalTitle.textContent = title;
+  el.modalBody.replaceChildren(body);
+  if (!el.modal.open) el.modal.showModal();
+}
+
+function closeModal() {
+  state.openDetailJobId = null;
+  if (el.modal.open) el.modal.close();
+}
+
+// Escape and the backdrop close the dialog without going through closeModal().
+el.modal.addEventListener("close", () => {
+  state.openDetailJobId = null;
+});
+
+el.modal.addEventListener("click", (event) => {
+  // A click on the backdrop lands on the dialog itself, never on its contents.
+  if (event.target === el.modal || event.target.hasAttribute("data-close")) closeModal();
+});
 
 // --- upload ---------------------------------------------------------------
 
@@ -128,6 +157,17 @@ function render() {
   el.empty.hidden = jobs.length > 0;
   el.rows.replaceChildren(...jobs.map(renderRow));
   renderBatchProgress(jobs);
+  refreshOpenDetail();
+}
+
+function refreshOpenDetail() {
+  // An open dialog must keep pace with the conversion behind it rather than showing the
+  // state at open time (FR-011). Terminal jobs stop changing, so they need no re-fetch.
+  const jobId = state.openDetailJobId;
+  if (!jobId) return;
+  const job = state.jobs.get(jobId);
+  if (job && !IN_FLIGHT.has(job.status)) return;
+  showDetail(jobId);
 }
 
 const TERMINAL = new Set([
@@ -176,6 +216,7 @@ function renderRow(job) {
   const file = document.createElement("td");
   file.className = "file";
   file.textContent = job.filename;
+  file.title = job.filename;
   row.append(file);
 
   const status = document.createElement("td");
@@ -186,65 +227,382 @@ function renderRow(job) {
   row.append(status);
 
   row.append(renderDetail(job));
-  row.append(renderDownload(job));
+  row.append(renderActions(job));
   return row;
 }
 
 function renderDetail(job) {
   const cell = document.createElement("td");
   cell.className = "detail";
+  const text = document.createElement("div");
+  text.className = "clamp";
   if (job.failure_reason) {
-    cell.classList.add("reason");
-    cell.textContent = job.failure_reason;
+    text.classList.add("reason");
+    text.textContent = job.failure_reason;
   } else if (job.status === "succeeded_suspect") {
     // A conversion that produced almost nothing: still downloadable, but say so (FR-029).
-    cell.classList.add("caution");
-    cell.textContent =
+    text.classList.add("caution");
+    text.textContent =
       "The Markdown came out almost empty. Open it before importing — the source may be " +
       "a blank scan, or the text may not have been recognized.";
   } else if (job.status === "succeeded_incomplete") {
     // Some pages could not be converted. The file is there and downloadable, but it has a
     // hole in it and the person importing needs to know which pages (FR-035).
-    cell.classList.add("caution");
+    text.classList.add("caution");
     const ranges = (job.missing_page_ranges || [])
       .map(([first, last]) => (first === last ? `${first}` : `${first}–${last}`))
       .join(", ");
-    cell.textContent = ranges
+    text.textContent = ranges
       ? `Converted, but pages ${ranges} are missing — those pages could not be converted. ` +
         "The gap is marked in the Markdown too."
       : "Converted, but some pages are missing from the result.";
   } else if (job.status === "already_converted") {
     // Not new work: this exact document is already in the output folder (FR-014).
-    cell.textContent = job.output_filename
+    text.textContent = job.output_filename
       ? `Already in the output folder as ${job.output_filename} — converted earlier.`
       : "This document was already converted earlier.";
   } else if (job.engine_status === "partial_success") {
-    cell.classList.add("caution");
-    cell.textContent =
+    text.classList.add("caution");
+    text.textContent =
       "Converted, but parts of the document could not be fully read. Check those " +
       "sections before importing.";
   } else if (job.status === "queued" && job.queue_position !== null) {
-    cell.textContent = `Waiting — position ${job.queue_position} in the queue`;
+    text.textContent = `Waiting — position ${job.queue_position} in the queue`;
   } else if (job.status === "queued" || job.status === "submitted") {
-    cell.textContent = "Waiting for a converter";
+    text.textContent = "Waiting for a converter";
   } else if (job.status === "running") {
-    cell.textContent = "Converting…";
+    text.textContent = "Converting…";
   } else {
-    cell.textContent = "";
+    text.textContent = "";
   }
+  cell.append(text);
+  markIfClamped(cell, text, job);
   return cell;
 }
 
-function renderDownload(job) {
+function markIfClamped(cell, text, job) {
+  // CSS hides the overflow but cannot report it, so the page measures after insertion.
+  // The row is not in the document yet, so defer to the next frame.
+  requestAnimationFrame(() => {
+    if (text.scrollHeight <= text.clientHeight) return;
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "more";
+    more.textContent = "More";
+    more.addEventListener("click", () => showDetail(job.job_id));
+    cell.append(more);
+  });
+}
+
+function renderActions(job) {
   const cell = document.createElement("td");
-  if (!job.download_url) return cell;
-  const link = document.createElement("a");
-  link.className = "download";
-  link.href = job.download_url;
-  link.textContent = job.output_filename || "Download";
-  link.setAttribute("download", "");
-  cell.append(link);
+  cell.className = "actions";
+
+  if (job.download_url) {
+    const link = document.createElement("a");
+    link.className = "download";
+    link.href = job.download_url;
+    // Labelled, not named after the file: a section filename is long enough to have
+    // been a width problem of its own. The name is in the title and in the detail view.
+    link.textContent = "Download";
+    link.title = job.output_filename || "";
+    link.setAttribute("download", "");
+    cell.append(link);
+  }
+
+  const details = document.createElement("button");
+  details.type = "button";
+  details.textContent = "Details";
+  details.addEventListener("click", () => showDetail(job.job_id));
+  cell.append(details);
+
+  cell.append(renderDeleteButton(job));
   return cell;
+}
+
+// --- detail view (feature 002) --------------------------------------------
+
+async function showDetail(jobId) {
+  state.openDetailJobId = jobId;
+  let detail;
+  try {
+    const response = await fetch(`/api/jobs/${jobId}`);
+    if (!response.ok) throw new Error("not available");
+    detail = await response.json();
+  } catch (error) {
+    openModal("Details", messageBlock("The server could not be reached. Try again."));
+    return;
+  }
+  if (state.openDetailJobId !== jobId) return;
+  openModal(detail.filename, renderDetailDialog(detail));
+}
+
+function renderDetailDialog(detail) {
+  const body = document.createElement("div");
+
+  const message = document.createElement("p");
+  message.className = detail.failure_reason ? "full-message reason" : "full-message";
+  message.textContent = fullMessage(detail);
+  body.append(message);
+
+  const facts = document.createElement("dl");
+  facts.className = "facts";
+  for (const [term, value] of factsOf(detail)) {
+    if (value === null || value === undefined || value === "") continue;
+    const dt = document.createElement("dt");
+    dt.textContent = term;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    facts.append(dt, dd);
+  }
+  body.append(facts);
+
+  const files = detail.document_outputs || [];
+  if (files.length) {
+    const heading = document.createElement("p");
+    heading.textContent = files.length === 1 ? "Output file" : `Output files (${files.length})`;
+    body.append(heading);
+    const list = document.createElement("ul");
+    list.className = "detail-files";
+    for (const file of files) {
+      const item = document.createElement("li");
+      const title = file.section_title ? `${file.section_title} — ` : "";
+      item.textContent = `${title}${file.filename} (${formatBytes(file.bytes)})`;
+      list.append(item);
+    }
+    body.append(list);
+  }
+
+  if (detail.engine_errors && detail.engine_errors.length) {
+    const errors = document.createElement("pre");
+    errors.className = "engine-errors";
+    errors.textContent = detail.engine_errors.join("\n");
+    body.append(errors);
+  }
+
+  return body;
+}
+
+function fullMessage(detail) {
+  // The complete text the row had to cut short, with no truncation of any kind (FR-009).
+  if (detail.failure_reason) return detail.failure_reason;
+  if (detail.status === "succeeded_suspect") {
+    return "The Markdown came out almost empty. Open it before importing it.";
+  }
+  if (detail.status === "succeeded_incomplete") {
+    const ranges = (detail.missing_page_ranges || [])
+      .map(([first, last]) => (first === last ? `${first}` : `${first}–${last}`))
+      .join(", ");
+    return `Converted, but pages ${ranges} are missing — those parts failed.`;
+  }
+  if (detail.status === "already_converted") {
+    return "This document was already converted earlier; the Markdown is in the output folder.";
+  }
+  if (detail.engine_status === "partial_success") {
+    return "Converted, but parts of the document could not be fully read.";
+  }
+  return "Converted.";
+}
+
+function factsOf(detail) {
+  return [
+    ["Status", detail.display_status],
+    ["Queue position", detail.queue_position],
+    ["Parts", detail.part_count > 1 ? `${detail.parts_completed} of ${detail.part_count}` : null],
+    ["Size", formatBytes(detail.size_bytes)],
+    ["Pages", detail.page_count],
+    ["Attempt", detail.attempt],
+    ["Submitted", formatTime(detail.created_at)],
+    ["Started", formatTime(detail.started_at)],
+    ["Finished", formatTime(detail.ended_at)],
+    ["Took", detail.processing_seconds === null ? null : `${detail.processing_seconds}s`],
+    ["Uploaded copy", detail.retained_upload ? "still on the server" : "no longer held"],
+  ];
+}
+
+function formatBytes(value) {
+  if (value === null || value === undefined) return null;
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} bytes`;
+}
+
+function formatTime(value) {
+  if (!value) return null;
+  return new Date(value).toLocaleString();
+}
+
+// --- deletion (feature 002) -----------------------------------------------
+
+const IN_FLIGHT = new Set(["queued", "submitted", "running"]);
+
+function siblingsOf(job) {
+  // Every conversion of the same document that this page currently knows about.
+  return Array.from(state.jobs.values()).filter((other) => other.content_hash === job.content_hash);
+}
+
+function renderDeleteButton(job) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "delete";
+  button.textContent = "Delete";
+
+  const busy = siblingsOf(job).find((other) => IN_FLIGHT.has(other.status));
+  if (busy) {
+    // Visible but unavailable, with the reason: an absent control is indistinguishable
+    // from the feature being missing (FR-019). The server refuses it too (FR-022).
+    button.disabled = true;
+    button.title = `"${job.filename}" is still converting. Wait for it to finish, then delete it.`;
+    return button;
+  }
+
+  button.addEventListener("click", () => confirmDelete(job));
+  return button;
+}
+
+async function confirmDelete(job) {
+  // The confirmation has to say exactly what will go, so it asks rather than guesses.
+  // The entry count comes from a filtered query, not from the rows on screen: the list is
+  // capped by `limit` and an older sibling would go uncounted (X5).
+  let entries;
+  let detail;
+  try {
+    const [listResponse, detailResponse] = await Promise.all([
+      fetch(`/api/jobs?content_hash=${encodeURIComponent(job.content_hash)}`),
+      fetch(`/api/jobs/${job.job_id}`),
+    ]);
+    if (!listResponse.ok || !detailResponse.ok) throw new Error("lookup failed");
+    entries = (await listResponse.json()).jobs.length;
+    detail = await detailResponse.json();
+  } catch (error) {
+    openModal("Delete", messageBlock("The server could not be reached, so there is nothing to confirm. Try again."));
+    return;
+  }
+  openModal(`Delete "${job.filename}"?`, confirmationBody(job, detail, entries));
+}
+
+function confirmationBody(job, detail, entries) {
+  const body = document.createElement("div");
+  body.className = "confirm";
+
+  const what = document.createElement("p");
+  what.textContent =
+    entries > 1
+      ? `This removes all ${entries} entries for this document, and everything it produced.`
+      : "This removes the entry and everything it produced.";
+  body.append(what);
+
+  // Every file for the document, whichever conversion wrote it. Built from `outputs`
+  // instead, an already-converted row would promise to remove nothing (X4).
+  const files = detail.document_outputs || [];
+  if (files.length) {
+    const heading = document.createElement("p");
+    heading.textContent = files.length === 1 ? "This Markdown file:" : `These ${files.length} Markdown files:`;
+    body.append(heading);
+    const list = document.createElement("ul");
+    for (const file of files) {
+      const item = document.createElement("li");
+      item.textContent = file.filename;
+      list.append(item);
+    }
+    body.append(list);
+  } else {
+    body.append(messageBlock("No Markdown was produced for this document, so there is none to remove."));
+  }
+
+  if (detail.retained_upload) {
+    body.append(messageBlock("The uploaded PDF held on the server is discarded too."));
+  }
+
+  const warn = document.createElement("p");
+  warn.className = "warn";
+  warn.textContent = "This cannot be undone.";
+  body.append(warn);
+
+  const choices = document.createElement("div");
+  choices.className = "choices";
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", closeModal);
+
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "danger";
+  confirm.textContent = "Delete";
+  confirm.addEventListener("click", () => performDelete(job, confirm));
+
+  choices.append(cancel, confirm);
+  body.append(choices);
+
+  // Cancel is the default outcome, so it is what a stray Enter or Space lands on (FR-015).
+  requestAnimationFrame(() => cancel.focus());
+  return body;
+}
+
+async function performDelete(job, button) {
+  button.disabled = true;
+  button.textContent = "Deleting…";
+  let payload;
+  let ok;
+  try {
+    const response = await fetch(`/api/jobs/${job.job_id}`, { method: "DELETE" });
+    ok = response.ok;
+    payload = await response.json();
+    if (!ok && response.status === 404) {
+      // Another tab got there first, or the history was pruned. The row is gone either
+      // way, which is the outcome the operator asked for.
+      forget([job.job_id]);
+      closeModal();
+      return;
+    }
+  } catch (error) {
+    reportOutcome("The server could not be reached. Nothing was deleted.", true);
+    return;
+  }
+
+  if (!ok) {
+    reportOutcome(messageOf(payload), true);
+    return;
+  }
+
+  // `job_ids` is authoritative: if it names entries the confirmation did not predict,
+  // those rows go too (X6).
+  forget(payload.job_ids);
+  refreshHealth();
+  closeModal();
+
+  if (payload.kept_files.length) {
+    showRejections([
+      {
+        filename: payload.filename,
+        reason:
+          `Removed from the list, but ${payload.kept_files.length} file(s) could not be ` +
+          `deleted from the output folder: ${payload.kept_files.join(", ")}. ` +
+          "The output-folder count no longer matches the folder.",
+      },
+    ]);
+  }
+}
+
+function forget(jobIds) {
+  for (const id of jobIds) state.jobs.delete(id);
+  render();
+}
+
+function reportOutcome(message, bad) {
+  const note = document.createElement("p");
+  note.className = bad ? "outcome bad" : "outcome";
+  note.textContent = message;
+  el.modalBody.append(note);
+}
+
+function messageBlock(text) {
+  const paragraph = document.createElement("p");
+  paragraph.textContent = text;
+  return paragraph;
 }
 
 // --- health ---------------------------------------------------------------

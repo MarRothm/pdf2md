@@ -9,10 +9,12 @@ from fastapi import APIRouter, Query, Request, Response
 from pdf2md.api import ApiError, db_of, storage_of
 from pdf2md.clock import now_iso, parse_iso
 from pdf2md.db import Database, JobView
+from pdf2md.deletion import DeletionRefused, UnknownJob, delete_document
 from pdf2md.logging_config import log_job
 from pdf2md.models import (
     DOWNLOADABLE_STATUSES,
     TERMINAL_STATUSES,
+    DeletionResult,
     JobDetail,
     JobListResponse,
     JobStatus,
@@ -35,13 +37,20 @@ async def list_jobs(
     batch_id: str | None = None,
     status: list[str] | None = Query(default=None),
     since: str | None = None,
+    content_hash: str | None = None,
 ) -> JobListResponse:
     db = db_of(request)
     if since:
         _validate_since(since)
     for value in status or []:
         _validate_status(value)
-    views = db.job_views(limit=limit, batch_id=batch_id, statuses=status, since=since)
+    views = db.job_views(
+        limit=limit,
+        batch_id=batch_id,
+        statuses=status,
+        since=since,
+        content_hash=content_hash,
+    )
     return JobListResponse(
         server_time=now_iso(),
         backlog=db.backlog(),
@@ -52,19 +61,22 @@ async def list_jobs(
 @router.get("/{job_id}", response_model=JobDetail)
 async def get_job(request: Request, job_id: str) -> JobDetail:
     db = db_of(request)
+    storage = storage_of(request)
     view = _require_view(db, job_id)
+    recorded = db.outputs_for_hash(view.job.content_hash)
     # What the operator will actually find in the outbox — one file, or one per section
     # for a document above the threshold (FR-033).
-    outputs = [
-        OutputFile(
-            filename=output.output_filename,
-            bytes=output.bytes,
-            section_title=output.section_title,
-        )
-        for output in db.outputs_for_hash(view.job.content_hash)
-        if output.job_id == view.job.id
-    ]
-    return to_detail(view, outputs)
+    outputs = [_output_file(output) for output in recorded if output.job_id == view.job.id]
+    # Every file for the document, whichever job wrote it. The delete confirmation is
+    # built from this: an `already_converted` job's own `outputs` is empty while the
+    # document it points at has files (feature 002, FR-017).
+    document_outputs = [_output_file(output) for output in recorded]
+    return to_detail(
+        view,
+        outputs,
+        document_outputs=document_outputs,
+        retained_upload=storage.has_inbox_file(view.job.content_hash),
+    )
 
 
 @router.get("/{job_id}/markdown")
@@ -103,6 +115,28 @@ async def download_markdown(request: Request, job_id: str) -> Response:
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{job.output_filename}"'},
     )
+
+
+@router.delete("/{job_id}", response_model=DeletionResult)
+async def delete_job(request: Request, job_id: str) -> DeletionResult:
+    """Delete the document this conversion belongs to — every entry, file, and the upload.
+
+    Irreversible, and deliberately without a `?confirm=` flag: a flag a client can set is
+    not a confirmation a person gave. The page asks (FR-014); this performs.
+    """
+    db = db_of(request)
+    storage = storage_of(request)
+    try:
+        result = delete_document(db, storage, job_id)
+    except UnknownJob as error:
+        raise ApiError(
+            404,
+            "already_deleted",
+            "That document is no longer in the list — it has already been deleted.",
+        ) from error
+    except DeletionRefused as error:
+        raise ApiError(409, "still_converting", error.message) from error
+    return result
 
 
 @router.post("/{job_id}/retry", status_code=202, response_model=RetryResponse)
@@ -150,6 +184,14 @@ async def retry_job(request: Request, job_id: str) -> RetryResponse:
 # --- shaping --------------------------------------------------------------
 
 
+def _output_file(output) -> OutputFile:
+    return OutputFile(
+        filename=output.output_filename,
+        bytes=output.bytes,
+        section_title=output.section_title,
+    )
+
+
 def to_summary(view: JobView) -> JobSummary:
     job = view.job
     downloadable = job.status in DOWNLOADABLE_STATUSES and bool(job.output_filename)
@@ -157,6 +199,7 @@ def to_summary(view: JobView) -> JobSummary:
         job_id=job.id,
         batch_id=job.batch_id,
         filename=job.submitted_filename,
+        content_hash=job.content_hash,
         status=job.status,
         display_status=display_status(
             job.status,
@@ -181,15 +224,22 @@ def to_summary(view: JobView) -> JobSummary:
     )
 
 
-def to_detail(view: JobView, outputs: list[OutputFile] | None = None) -> JobDetail:
+def to_detail(
+    view: JobView,
+    outputs: list[OutputFile] | None = None,
+    *,
+    document_outputs: list[OutputFile] | None = None,
+    retained_upload: bool = False,
+) -> JobDetail:
     job = view.job
     return JobDetail(
         **to_summary(view).model_dump(),
         engine_errors=job.engine_errors,
         processing_seconds=_processing_seconds(view),
         output_bytes=view.output_bytes,
-        content_hash=job.content_hash,
         outputs=outputs or [],
+        document_outputs=document_outputs or [],
+        retained_upload=retained_upload,
     )
 
 

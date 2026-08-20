@@ -385,6 +385,7 @@ class Database:
         batch_id: str | None = None,
         statuses: Iterable[str] | None = None,
         since: str | None = None,
+        content_hash: str | None = None,
     ) -> list[JobView]:
         """Jobs with the document and output fields the page shows, in one query.
 
@@ -403,6 +404,11 @@ class Database:
         if since:
             clauses.append("j.updated_at > ?")
             params.append(since)
+        if content_hash:
+            # Every conversion of one document, so a delete confirmation can say how many
+            # entries will disappear. Not on the polling path (feature 002, R5).
+            clauses.append("j.content_hash = ?")
+            params.append(content_hash)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         with self.connection() as conn:
@@ -794,6 +800,37 @@ class Database:
         with self.connection() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM markdown_output").fetchone()
         return int(row["n"])
+
+    # --- deletion (feature 002) -------------------------------------------
+
+    def delete_document_rows(self, content_hash: str) -> list[str]:
+        """Remove every row belonging to one document. Returns the job ids removed.
+
+        The order is forced by the foreign keys, which are enforced on every connection:
+        `conversion_job.output_filename` references `markdown_output`, so the jobs go
+        first, and `markdown_output.content_hash` references `source_document`, so the
+        outputs go before the document. `conversion_part.job_id` is ON DELETE CASCADE, so
+        the parts need no statement of their own.
+
+        `batch` rows are deliberately left alone. `conversion_job.batch_id` is ON DELETE
+        SET NULL, a batch that loses all its jobs is harmless, and deleting one would take
+        other documents' jobs with it (data-model.md).
+
+        The caller unlinks the files *before* calling this. A crash between the two leaves
+        rows pointing at absent files, which every read path already survives; the reverse
+        would leave files in the outbox that no record mentions (research.md R7).
+        """
+        with self.connection() as conn:
+            job_ids = [
+                row["id"]
+                for row in conn.execute(
+                    "SELECT id FROM conversion_job WHERE content_hash = ?", (content_hash,)
+                ).fetchall()
+            ]
+            conn.execute("DELETE FROM conversion_job WHERE content_hash = ?", (content_hash,))
+            conn.execute("DELETE FROM markdown_output WHERE content_hash = ?", (content_hash,))
+            conn.execute("DELETE FROM source_document WHERE content_hash = ?", (content_hash,))
+        return job_ids
 
     # --- retention --------------------------------------------------------
 

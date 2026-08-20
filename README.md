@@ -37,6 +37,15 @@ here.
 provide: a dependency-free browser page, a durable job registry, content-addressed output
 naming, and writing finished Markdown into the outbox folder the operator imports from.
 
+The page lists documents in a fixed-width table — a long failure message is previewed over
+three lines rather than stretching the page — and any row opens a detail view with the full
+message, the timings, and the files it produced. A row can also be deleted. Deleting is
+deliberately total: it removes the Markdown from the outbox, the uploaded PDF still held on
+the server, and every list entry for that document, so uploading the same file again
+converts it afresh instead of reporting it as already converted. It asks first, naming every
+file it is about to remove, and it refuses while any conversion of that document is still
+running.
+
 ## Where things are
 
 | Path | What it is |
@@ -46,6 +55,7 @@ naming, and writing finished Markdown into the outbox folder the operator import
 | `ops/` | Image and isolation verification, and the fidelity harness |
 | `tests/` | Unit, contract, and integration tests against a stub engine |
 | `specs/001-docling-pdf2md-stack/` | Why everything is the way it is |
+| `specs/002-job-list-layout-delete/` | The fixed-width list, the detail view, and deletion |
 
 Start with [`deploy/README.md`](deploy/README.md) to run it —
 [`deploy/PORTAINER-EE-CHECKLIST.md`](deploy/PORTAINER-EE-CHECKLIST.md) is the same thing as a

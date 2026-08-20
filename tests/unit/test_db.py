@@ -197,3 +197,80 @@ def test_migrating_an_existing_database_keeps_its_job_history(tmp_path):
             " VALUES ('job-2', 'abc123', 'new.pdf', 'succeeded_incomplete', ?, ?, 1)",
             (now_iso(), now_iso()),
         )
+
+
+# --- deleting a document (feature 002) --------------------------------------
+
+
+def test_delete_document_rows_removes_every_trace_of_the_hash(db):
+    _document(db)
+    job = db.create_job(content_hash=HASH, submitted_filename="report.pdf")
+    db.record_output_and_finish(
+        job_id=job.id,
+        content_hash=HASH,
+        output_filename="report--aaa.md",
+        size_bytes=10,
+        engine_status="success",
+        status=JobStatus.SUCCEEDED,
+    )
+
+    removed = db.delete_document_rows(HASH)
+
+    assert removed == [job.id]
+    assert db.get_job(job.id) is None
+    assert db.get_output("report--aaa.md") is None
+    assert db.get_source_document(HASH) is None
+
+
+def test_delete_document_rows_takes_the_parts_with_it(db):
+    """`conversion_part.job_id` is ON DELETE CASCADE, so parts need no statement."""
+    _document(db)
+    job = db.create_job(content_hash=HASH, submitted_filename="long.pdf")
+    db.create_parts(job.id, [(1, 100), (101, 200)])
+    assert len(db.parts_for_job(job.id)) == 2
+
+    db.delete_document_rows(HASH)
+
+    assert db.parts_for_job(job.id) == []
+
+
+def test_delete_document_rows_leaves_other_documents_alone(db):
+    _document(db)
+    _document(db, content_hash=OTHER_HASH, filename="other.pdf")
+    keep = db.create_job(content_hash=OTHER_HASH, submitted_filename="other.pdf")
+    db.create_job(content_hash=HASH, submitted_filename="report.pdf")
+
+    db.delete_document_rows(HASH)
+
+    assert db.get_job(keep.id) is not None
+    assert db.get_source_document(OTHER_HASH) is not None
+
+
+def test_delete_document_rows_keeps_the_batch(db):
+    """A batch that loses its jobs is harmless; deleting it would strike other documents."""
+    batch_id = db.create_batch(document_count=2)
+    _document(db)
+    _document(db, content_hash=OTHER_HASH, filename="other.pdf")
+    db.create_job(content_hash=HASH, submitted_filename="report.pdf", batch_id=batch_id)
+    sibling = db.create_job(
+        content_hash=OTHER_HASH, submitted_filename="other.pdf", batch_id=batch_id
+    )
+
+    db.delete_document_rows(HASH)
+
+    assert db.get_job(sibling.id).batch_id == batch_id
+
+
+def test_delete_document_rows_on_an_unknown_hash_removes_nothing(db):
+    assert db.delete_document_rows("f" * 64) == []
+
+
+def test_job_views_can_be_filtered_by_content_hash(db):
+    _document(db)
+    _document(db, content_hash=OTHER_HASH, filename="other.pdf")
+    mine = db.create_job(content_hash=HASH, submitted_filename="report.pdf")
+    db.create_job(content_hash=OTHER_HASH, submitted_filename="other.pdf")
+
+    views = db.job_views(limit=100, content_hash=HASH)
+
+    assert [view.job.id for view in views] == [mine.id]

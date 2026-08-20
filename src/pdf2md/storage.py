@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 from pdf2md.clock import now, parse_iso
@@ -101,12 +102,38 @@ class Storage:
     def delete_outbox_file(self, output_filename: str) -> None:
         """Remove a file this service previously wrote.
 
-        The only outbox deletion the service performs, and it is narrow on purpose: a
-        document being re-converted replaces its own section files, because an engine
-        upgrade can detect different headings and would otherwise leave two contradictory
-        versions of the same document for AnythingLLM to cite (research.md R13).
+        Two callers, both narrow on purpose. A document being re-converted replaces its own
+        section files, because an engine upgrade can detect different headings and would
+        otherwise leave two contradictory versions of the same document for AnythingLLM to
+        cite (research.md R13). And an operator deleting a document removes its output
+        deliberately, through `delete_outbox_files` below (feature 002, FR-017).
+
+        Neither ever scans the outbox. The only names either passes are names recorded in
+        `markdown_output`, so a file this service did not write cannot be removed by it.
         """
         self.outbox_file(output_filename).unlink(missing_ok=True)
+
+    def delete_outbox_files(self, output_filenames: Iterable[str]) -> tuple[list[str], list[str]]:
+        """Remove several recorded outputs; returns the names removed and those kept.
+
+        Best effort by design: an unwritable outbox must not abort a deletion halfway and
+        leave the operator with no way to finish it. What survived is reported back and
+        named in the log (data-model.md INV-5, FR-018).
+        """
+        removed: list[str] = []
+        kept: list[str] = []
+        for name in output_filenames:
+            # A file already gone is neither removed nor kept: nothing happened to it, and
+            # reporting it as removed would credit this deletion with someone else's work.
+            if not self.has_outbox_file(name):
+                continue
+            try:
+                self.delete_outbox_file(name)
+            except OSError:
+                kept.append(name)
+            else:
+                removed.append(name)
+        return removed, kept
 
     # --- probes -----------------------------------------------------------
 

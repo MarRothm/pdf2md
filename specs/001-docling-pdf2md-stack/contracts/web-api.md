@@ -62,6 +62,11 @@ Since the page count is read at upload (research.md R11), the last three are now
 
 ## `GET /api/jobs`
 
+> **Extended by feature 002.** Every summary now carries `content_hash`, and the endpoint accepts a
+> `content_hash` filter. `GET /api/jobs/{job_id}` gains `document_outputs` and `retained_upload`,
+> and `DELETE /api/jobs/{job_id}` is new. See
+> [`specs/002-job-list-layout-delete/contracts/web-api-deletion.md`](../../002-job-list-layout-delete/contracts/web-api-deletion.md).
+
 The list the page polls (FR-010). Returns most recent first.
 
 | Query param | Default | Notes |

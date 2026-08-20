@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 
 import httpx
 import pytest
@@ -110,3 +111,31 @@ def convert(upload, dispatcher):
         return response
 
     return _convert
+
+
+@pytest.fixture
+def converted_document(convert, client):
+    """Convert one document and hand back what a deletion test needs to check afterwards.
+
+    Returns the job id, the content hash, and the outbox paths the conversion wrote — the
+    three things every deletion assertion is about (feature 002, T002).
+    """
+
+    async def _converted(name: str = "report.pdf", marker: bytes = b"body", **kwargs):
+        response = await convert((name, pdf_bytes(marker, **kwargs)))
+        job_id = response.json()["accepted"][0]["job_id"]
+        detail = (await client.get(f"/api/jobs/{job_id}")).json()
+        return ConvertedDocument(
+            job_id=job_id,
+            content_hash=detail["content_hash"],
+            filenames=[output["filename"] for output in detail["outputs"]],
+        )
+
+    return _converted
+
+
+@dataclass
+class ConvertedDocument:
+    job_id: str
+    content_hash: str
+    filenames: list[str]
