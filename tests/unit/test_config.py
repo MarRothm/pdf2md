@@ -54,3 +54,21 @@ def test_in_flight_ceiling_follows_the_engine_worker_count(clean_env):
     clean_env.setenv("PDF2MD_ENGINE_WORKERS", "2")
     clean_env.setenv("PDF2MD_IN_FLIGHT_BUFFER", "1")
     assert Settings().max_in_flight == 3
+
+
+def test_the_version_has_exactly_one_source():
+    """`/api/health` and the startup log report `__version__`; the build must use the same.
+
+    It drifted silently for two releases — the version was a literal in `__init__.py` and
+    another in `pyproject.toml`, and only the second was ever bumped, so the 1.2.0 image
+    reported itself as 1.0.0. `pyproject.toml` now derives from the module.
+    """
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    config = tomllib.loads(pyproject.read_text())
+
+    assert "version" not in config["project"], "a second literal would drift again"
+    assert config["project"]["dynamic"] == ["version"]
+    assert config["tool"]["hatch"]["version"]["path"] == "src/pdf2md/__init__.py"

@@ -115,12 +115,13 @@ been pinned. Four steps, and it is always **two commits** — the digest cannot 
 down until the image it names exists.
 
 ```bash
-# 1. Bump the version and push it
-sed -i '' 's/^version = ".*"/version = "1.2.0"/' pyproject.toml
-git commit -am "Bump to 1.2.0" && git push
+# 1. Bump the version and push it. The version lives in exactly one place;
+#    pyproject.toml reads it from there through hatchling.
+sed -i '' 's/^__version__ = ".*"/__version__ = "1.3.0"/' src/pdf2md/__init__.py
+git commit -am "Bump to 1.3.0" && git push
 
 # 2. Tag it — this is what triggers .github/workflows/publish.yml
-git tag v1.2.0 && git push origin v1.2.0
+git tag v1.3.0 && git push origin v1.3.0
 ```
 
 **3.** When the workflow finishes it prints the full image reference in its job summary.
