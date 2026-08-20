@@ -147,6 +147,13 @@ The digest lives in exactly one place. `deploy/.env.example` documents `WEB_IMAG
 value there would be a stale second copy that silently outranks the stack file. A unit
 test fails if one reappears.
 
+**Old images are deleted.** After each publish, `.github/workflows/prune-images.yml` keeps
+only the two newest `pdf2md-web` versions in GHCR and removes the rest. That leaves exactly
+one rollback step, and it means a version older than latest-1 no longer exists anywhere: a
+container still running one keeps running, but it can never be pulled again. **Redeploy
+after a release.** Skipping two releases in a row makes the image on the Mac mini
+unobtainable, so a host rebuild at that version becomes impossible.
+
 Only the web image moves this way. The engine is upstream and pinned separately; upgrading
 it is a bigger decision because it changes layout analysis (§10).
 

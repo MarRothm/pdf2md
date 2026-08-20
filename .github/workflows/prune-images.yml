@@ -1,0 +1,66 @@
+# Keeps GHCR to the two newest web images: the current release and one step back.
+#
+# Runs after every successful publish, and by hand from the Actions tab when you want to
+# clear a backlog without cutting a release.
+#
+# The retention rule is deliberate and it is lossy: a version older than latest-1 is
+# deleted from the registry, which is the only copy. `pull_policy: missing` means a
+# container already running an older image keeps running, but that version can never be
+# pulled again — no rollback to it, and no rebuilding a host at it. Skipping a redeploy
+# for two releases is therefore enough to make the image on the Mac mini unobtainable.
+# That trade was chosen knowingly: one rollback step is considered enough.
+name: prune-images
+
+on:
+  workflow_run:
+    workflows: ["publish"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  prune:
+    # A failed publish has nothing worth pruning around; a manual run always proceeds.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      # Untagged manifests are build residue, not releases, and they must go first: they
+      # count as versions, so leaving them in place could let two untagged entries fill
+      # the "two newest" window and take a real release with them.
+      - name: Delete untagged manifests
+        uses: actions/delete-package-versions@v5
+        with:
+          owner: MarRothm
+          package-name: pdf2md-web
+          package-type: container
+          min-versions-to-keep: 0
+          delete-only-untagged-versions: true
+          token: ${{ secrets.GHCR_CLEANUP_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Everything left is a tagged release, so "the two newest versions" is exactly
+      # latest and latest-1.
+      - name: Keep only the two newest releases
+        uses: actions/delete-package-versions@v5
+        with:
+          owner: MarRothm
+          package-name: pdf2md-web
+          package-type: container
+          min-versions-to-keep: 2
+          token: ${{ secrets.GHCR_CLEANUP_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Say what remains
+        run: |
+          {
+            echo "### Registry pruned"
+            echo
+            echo "Kept the two newest \`pdf2md-web\` versions; everything older was deleted."
+            echo
+            echo "If this job failed on permissions, \`GITHUB_TOKEN\` cannot delete versions"
+            echo "of a user-owned package. Add a personal access token with the"
+            echo "\`delete:packages\` scope as the repository secret \`GHCR_CLEANUP_TOKEN\`"
+            echo "and re-run — the workflow picks it up automatically."
+          } >> "$GITHUB_STEP_SUMMARY"

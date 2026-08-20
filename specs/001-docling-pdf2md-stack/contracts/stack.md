@@ -35,6 +35,10 @@ Both images are pinned by tag **and** digest. The digest is what makes the pin r
 
 This does not weaken FR-032. The image is still pinned by digest, still never `latest`, and nothing redeploys itself: GitOps updates stay off and a person still triggers *Pull and redeploy*. What became automatic is the recording of what was built, not the decision to deploy it.
 
+**Registry retention: two versions.** `.github/workflows/prune-images.yml` deletes every `pdf2md-web` version in GHCR except the newest two — the current release and one step back — and removes untagged build residue. It runs after each successful publish and can be run by hand.
+
+The rule is lossy on purpose, and the loss is worth stating plainly: GHCR is the only copy of an image. A version older than latest-1 is gone, so there is exactly **one rollback step**. A container already running a deleted version keeps running, because `pull_policy: missing` reuses the local image, but that version can never be pulled again — no rollback to it, and no rebuilding the Mac mini at it. Two releases without a redeploy is therefore enough to make the running image unobtainable. Accepted knowingly (2026-08-20) over the alternative of also retaining whatever digest the stack file pins.
+
 ## Networks
 
 ```yaml
