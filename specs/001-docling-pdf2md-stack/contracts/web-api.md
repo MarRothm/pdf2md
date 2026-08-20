@@ -142,6 +142,11 @@ document and one per section for a document over the section threshold (FR-033),
 detail view can show what an operator will actually find in the outbox rather than a
 single name that no longer describes it.
 
+`succeeded_incomplete` is the one finished state `POST /api/jobs/{job_id}/retry` accepts:
+the file exists and is missing pages, so there is something to retry (FR-040). Every other
+downloadable state is still refused with `409 already_converted`. The retry is a whole new
+conversion of the document, and its output replaces the incomplete one in place.
+
 `missing_parts` is the detail behind `missing_page_ranges`: one entry per range that is
 absent from the finished document, with the reason the engine gave and how many attempts
 were made before it was accepted as a gap (FR-038). Empty for every other job. Without it

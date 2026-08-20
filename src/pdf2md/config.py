@@ -53,15 +53,17 @@ class Settings(BaseSettings):
     part_max_pages: int = 40
     """Documents longer than this are converted in parts (FR-034).
 
-    Sized to the engine's *time* ceiling, not its page ceiling: a part that outruns
-    DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT (2400s) is a hole in the finished document, so the
-    first attempt has to fit with room to spare. 40 pages allows 60s a page — a scanned
-    page with OCR on a CPU-only engine sharing its threads with a second worker, not the
-    ~10s a born-digital page takes. The old value of 100 assumed the latter and lost every
-    full part of a long scan to the ceiling (research.md R12).
+    Bounded by whichever ceiling binds first, and on this host that is not obviously the
+    clock: a 2038-page document lost all twenty of its 100-page parts in three and a half
+    minutes — about twenty seconds each — while its 38-page remainder converted, on an
+    engine that turns a 7-page document around in four seconds. Whatever a part meets at
+    that size, it meets it fast, and a smaller part is the one lever that applies to a
+    time limit, a memory limit, and a page-count limit alike.
 
-    Parts that still run out of time are halved and retried rather than abandoned, so this
-    is a starting value, not a limit: measure seconds per page on your own corpus.
+    A part that fails is halved and retried rather than abandoned (FR-038), so this is a
+    starting value, not a limit. Measure it on your own corpus, and read
+    `ops/why-are-pages-missing.sh` before changing it — the recorded reason for a gap says
+    which ceiling was actually hit, and guessing has already cost one wrong diagnosis.
     """
 
     part_retry_splits: int = 2

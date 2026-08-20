@@ -202,6 +202,12 @@ simply converted again, up to `PDF2MD_PART_MAX_ATTEMPTS` (3) times. Only when th
 spent is the range reported missing, and the detail view then names the range, the number
 of attempts, and the engine's own reason.
 
+**A document with gaps can be converted again.** The row grows a *Convert again* button,
+and re-uploading the same file starts a real conversion instead of reporting it as already
+converted — an incomplete file does not answer a request for the document (FR-040). Deleting
+is no longer the only route to a whole one. A *complete* output still short-circuits a
+re-upload exactly as before.
+
 **If one part fails, the rest are still written.** The document reports *Converted — pages
 N–M are missing*, and the gap is marked inside the Markdown as well as on the page. That
 matters because job history is pruned after `PDF2MD_JOB_HISTORY_DAYS` while the file in
@@ -222,16 +228,18 @@ wrote, only for the document being re-converted. Without it, an engine upgrade t
 detects headings differently would leave two contradictory versions of the same document
 for AnythingLLM to cite.
 
-**The part size is sized to time, not to pages.** `DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT` is
-2400 seconds *per submission*, so `PDF2MD_PART_MAX_PAGES` is really a per-page time budget:
-40 pages allows 60 seconds a page. That is deliberately generous, because the number that
-matters is not the ~10 seconds a born-digital page takes but the far larger number a
-scanned page costs when OCR runs on a CPU-only engine whose threads are shared with a
-second worker. The earlier default of 100 assumed the smaller number, and a long scan lost
-*every* full part to the ceiling — a document reporting *Converted* with almost nothing in
-it. Measure seconds per page on your own corpus and set it properly; the retry above is a
-safety net, not a substitute, since every part it rescues costs the engine a full timeout
-first.
+**The part size is a resource budget, not a page count.** A part has to fit inside every
+ceiling at once: `DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT` (2400 seconds per submission), the
+memory the engine and this service are each given, and the engine's page limit. Which one
+binds is a property of the corpus, not of the setting.
+
+On 20 August 2026 a 2038-page, 98 MB document lost all twenty of its 100-page parts in
+three and a half minutes — roughly twenty seconds each — while its 38-page remainder
+converted normally, on an engine that turns a 7-page document around in 4.1 seconds. That
+is not the clock: something at that size failed quickly and repeatedly. `PDF2MD_PART_MAX_PAGES`
+was lowered to 40 because a smaller part is the one lever that applies whichever ceiling it
+was, but the reason for those particular gaps is recorded per part —
+`ops/why-are-pages-missing.sh` prints it. **Read it before changing any setting here.**
 
 ---
 
@@ -405,7 +413,8 @@ accident.
 | Scanned German comes back without umlauts, or as nonsense | Recognition is running in the wrong language | `PDF2MD_OCR_PRESET` must name `easyocr`; `auto` reads English and Chinese only |
 | Host becomes sluggish under a batch | Engine memory or thread count too high | Lower `DOCLING_WORKERS`, keep `SHARE_MODELS` true, tighten `DOCLING_MEM_LIMIT` |
 | A job sits at Converting forever | The watchdog is above the engine's own timeout | `PDF2MD_JOB_TIMEOUT_SECONDS` must stay above `DOCLING_MAX_DOCUMENT_TIMEOUT`, and both must be finite |
-| A long document converts but reports missing pages | Parts are outrunning the engine's per-document ceiling | Open the row's detail view: it names each missing range and why. `part_timed_out` and `part_halved` in the `web` log give the seconds per page; lower `PDF2MD_PART_MAX_PAGES` to match |
+| A long document converts but reports missing pages, and there is no repo on the host | The reason is recorded per part and, before 1.7.0, displayed nowhere | Portainer → Containers → `web` → **Console** → Connect, then paste the one-liner in the header of `ops/why-are-pages-missing.sh`. From 1.7.0 the row's **Details** shows it directly, including for documents that already failed |
+| A long document converts but reports missing pages | Anything from the engine's time ceiling to a failure cutting the pages out of the PDF | **`ops/why-are-pages-missing.sh`** — it prints the recorded reason for every gap, and whether either container was killed for memory. Do that before changing any setting: the ranges alone do not say what happened |
 | Database errors after a redeploy | SQLite was moved onto a bind mount | It belongs on the named volume |
 | The stack redeployed on its own | GitOps updates were switched on | Turn them off; the deployed version is meant to change only when a person decides it should |
 

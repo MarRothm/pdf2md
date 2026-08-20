@@ -321,8 +321,38 @@ function renderActions(job) {
   details.addEventListener("click", () => showDetail(job.job_id));
   stack.append(details);
 
+  if (job.status === "succeeded_incomplete") {
+    // The one status where a finished document is still worth converting again: the file
+    // exists, and pages are missing from it (FR-040). Without this the only way to ask for
+    // a whole document is to delete this one, which throws away what did convert.
+    const again = document.createElement("button");
+    again.type = "button";
+    again.textContent = "Convert again";
+    again.title = "Convert the whole document again and replace this file";
+    again.addEventListener("click", () => convertAgain(job, again));
+    stack.append(again);
+  }
+
   stack.append(renderDeleteButton(job));
   return cell;
+}
+
+async function convertAgain(job, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${job.job_id}/retry`, { method: "POST" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const message = (body.error && body.error.message) || "That could not be started.";
+      openModal("Convert again", messageBlock(message));
+      button.disabled = false;
+      return;
+    }
+    await refreshJobs({ full: true });
+  } catch (error) {
+    openModal("Convert again", messageBlock("The server could not be reached. Try again."));
+    button.disabled = false;
+  }
 }
 
 // --- detail view (feature 002) --------------------------------------------

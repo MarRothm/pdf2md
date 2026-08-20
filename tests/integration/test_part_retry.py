@@ -1,9 +1,10 @@
 """A part that fails is tried again before it becomes a hole in the document (FR-038).
 
-The failure these cover is the one that was met in practice: a long scan whose every
-full-size part outran the engine's per-document time ceiling, leaving a document that
-reported *Converted* and contained almost nothing. Splitting rescues a document from the
-page limit; without retrying, it hands the whole document to the time limit instead.
+The failure these cover is the one that was met in practice: a 2038-page document whose
+every full-size part failed — in about twenty seconds each, so not for want of time —
+leaving a document that reported *Converted* and contained almost nothing, while its
+38-page remainder converted normally. Splitting rescues a document from the page limit;
+without retrying, it hands the whole document to whatever the next ceiling turns out to be.
 """
 
 import pytest
@@ -148,3 +149,23 @@ async def test_a_part_gives_up_once_its_attempts_are_spent(
 async def test_a_single_part_document_still_reports_no_missing_parts(convert, client):
     detail = await _detail(client, await convert(("small.pdf", pdf_bytes(b"one", pages=2))))
     assert detail["missing_parts"] == []
+
+
+async def test_spent_attempts_fall_through_to_a_smaller_range(
+    upload, client, dispatcher, stub_engine, settings
+):
+    """An engine that dies on a range takes its task table with it, so the symptom is a
+    lost task and the cure is a smaller part — not a third identical one."""
+    _sized(settings, part_max_pages=20, min_pages=5)
+    settings.part_max_attempts = 1
+    stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
+    stub_engine.set_behavior("oom.pdf (pages 1-20)", TaskBehavior(result_http_error=404))
+
+    body = (await upload(("oom.pdf", pdf_bytes(b"oom", pages=40)))).json()
+    job_id = body["accepted"][0]["job_id"]
+    await dispatcher.drain()
+
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    assert detail["status"] == "succeeded"
+    assert detail["missing_page_ranges"] is None
+    assert detail["part_count"] == 3

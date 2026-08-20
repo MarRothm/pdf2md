@@ -168,7 +168,7 @@ async def retry_job(request: Request, job_id: str) -> RetryResponse:
             "still_converting",
             f'"{job.submitted_filename}" is still converting — there is nothing to retry yet.',
         )
-    if job.status in DOWNLOADABLE_STATUSES:
+    if job.status in DOWNLOADABLE_STATUSES and job.status is not JobStatus.SUCCEEDED_INCOMPLETE:
         raise ApiError(
             409,
             "already_converted",

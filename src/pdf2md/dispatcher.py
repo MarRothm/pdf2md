@@ -56,7 +56,7 @@ TIMEOUT_REASON_TEMPLATE = (
 )
 PART_TIMEOUT_REASON = (
     "These pages were still converting after the time limit, even on their own. "
-    "They are probably scans of unusually dense pages."
+    "Whatever is on them costs far more than the rest of the document."
 )
 PART_LOST_REASON = (
     "The converter lost these pages before their result could be saved, and they could "
@@ -71,9 +71,16 @@ def claim_already_converted(db: Database, storage: Storage, job: ConversionJob) 
 
     Both the output row and the outbox file must be present: a row alone would send
     the user to a file the operator has since removed (data-model.md, FR-014).
+
+    A file with gaps in it does not count (FR-040). Otherwise a document that converted
+    incompletely is answered with that same holed file forever — every re-upload reports
+    *Already converted*, and the only way to ask for a whole one is to delete the document
+    outright, which throws away the pages that did convert.
     """
     output = db.get_output_for_hash(job.content_hash)
     if output is None or not storage.has_outbox_file(output.output_filename):
+        return None
+    if output_is_incomplete(db, output.job_id):
         return None
     db.finish_job(job.id, JobStatus.ALREADY_CONVERTED, output_filename=output.output_filename)
     log_job(
@@ -85,6 +92,19 @@ def claim_already_converted(db: Database, storage: Storage, job: ConversionJob) 
         output=output.output_filename,
     )
     return output.output_filename
+
+
+def output_is_incomplete(db: Database, job_id: str) -> bool:
+    """Whether the job that wrote an output reported pages missing from it (FR-040).
+
+    A job pruned from history answers `False`: after the retention period there is nothing
+    left to judge by, and re-converting every document whose history aged out would be a
+    far worse answer than trusting a file that has been in the outbox for a month.
+    """
+    producer = db.get_job(job_id)
+    if producer is None:
+        return False
+    return bool(producer.missing_page_ranges) or producer.status is JobStatus.SUCCEEDED_INCOMPLETE
 
 
 class Dispatcher:
@@ -301,6 +321,17 @@ class Dispatcher:
                 return
 
             self.db.mark_part_submitted(part.id, submitted.task_id)
+            log_job(
+                logger,
+                "part_submitted",
+                job_id=job.id,
+                filename=job.submitted_filename,
+                part=part.ordinal,
+                pages=f"{part.first_page}-{part.last_page}",
+                part_bytes=part_path.stat().st_size,
+                attempt=part.attempt,
+                task_id=submitted.task_id,
+            )
             capacity -= 1
             if job.status is JobStatus.QUEUED:
                 self.db.mark_submitted(job.id, submitted.task_id, submitted.task_position)
@@ -407,10 +438,14 @@ class Dispatcher:
     def _retry_part(
         self, job: ConversionJob, part: ConversionPart, reason: str, *, reason_log: str
     ) -> None:
-        """Convert the same pages again, or give up on them once the attempts are spent."""
+        """Convert the same pages again, then in smaller pieces, then give up.
+
+        The fall-through matters when the engine is not merely forgetful but is dying on
+        this range — an out-of-memory kill takes its whole task table with it, so the
+        symptom is a lost task and the cure is a smaller part, not a third identical one.
+        """
         if part.attempt >= self.settings.part_max_attempts:
-            self.db.finish_part(part.id, PartStatus.FAILED, failure_reason=reason)
-            self._log_part_gap(job, part, reason_log)
+            self._retry_part_smaller(job, part, reason, reason_log=reason_log)
             return
         self.db.requeue_part(part.id)
         log_job(
