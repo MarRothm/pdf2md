@@ -127,7 +127,7 @@ table.jobs td {
   border-bottom: 1px solid var(--line);
   padding: 0.55rem 0.5rem;
   vertical-align: top;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 table.jobs th:nth-child(1), table.jobs td:nth-child(1) { width: 30%; }
@@ -171,8 +171,20 @@ button.more {
 
 button.more[disabled] { color: var(--muted); text-decoration: none; }
 
-td.actions { display: flex; flex-direction: column; gap: 0.3rem; align-items: flex-start; }
-td.actions button, td.actions a {
+/* The cell is `row-actions`, not `actions`: the upload panel already owns `.actions`
+   (`display: flex; align-items: center`), and that rule was landing on this <td>,
+   flexing it out of table layout and centring its children into shrink-to-fit boxes one
+   character wide. The stacking belongs to a child, never to the cell. */
+.actions-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  /* No `align-items: flex-start`: that makes each control shrink-to-fit, and a
+     shrink-to-fit box inherits the cell's minimum content width. Stretching to the
+     column is both correct and immune to whatever the wrap rules do. */
+}
+
+td.row-actions button, td.row-actions a {
   padding: 0;
   border: 0;
   background: none;
@@ -181,9 +193,9 @@ td.actions button, td.actions a {
   font-size: 0.88rem;
   text-align: left;
 }
-td.actions button[disabled] { color: var(--muted); cursor: default; opacity: 1; }
-td.actions button.delete { color: var(--bad); }
-td.actions button.delete[disabled] { color: var(--muted); }
+td.row-actions button[disabled] { color: var(--muted); cursor: default; opacity: 1; }
+td.row-actions button.delete { color: var(--bad); }
+td.row-actions button.delete[disabled] { color: var(--muted); }
 
 .progress { color: var(--muted); font-size: 0.85rem; }
 .empty { color: var(--muted); font-size: 0.9rem; }
@@ -217,7 +229,7 @@ dialog::backdrop { background: rgb(28 32 36 / 45%); }
 .modal-head h2 {
   font-size: 1.05rem;
   margin: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 button.ghost {
@@ -239,17 +251,17 @@ button.danger { border-color: var(--bad); background: var(--bad); }
   font-size: 0.9rem;
   color: var(--muted);
 }
-.confirm li { overflow-wrap: anywhere; }
+.confirm li { overflow-wrap: break-word; }
 .confirm .choices { display: flex; gap: 0.75rem; margin-top: 1rem; }
 
 /* --- detail view (feature 002) -------------------------------------------- */
 .facts { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem; margin: 0; font-size: 0.9rem; }
 .facts dt { color: var(--muted); }
-.facts dd { margin: 0; overflow-wrap: anywhere; }
-.full-message { margin: 0 0 1rem; overflow-wrap: anywhere; }
+.facts dd { margin: 0; overflow-wrap: break-word; }
+.full-message { margin: 0 0 1rem; overflow-wrap: break-word; }
 .full-message.reason { color: var(--bad); }
 .detail-files { margin: 1rem 0 0; padding-left: 1.1rem; font-size: 0.9rem; }
-.detail-files li { overflow-wrap: anywhere; }
+.detail-files li { overflow-wrap: break-word; }
 .engine-errors {
   margin: 1rem 0 0;
   padding: 0.5rem 0.7rem;
@@ -257,7 +269,7 @@ button.danger { border-color: var(--bad); background: var(--bad); }
   border-left: 3px solid var(--bad);
   font-size: 0.85rem;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .outcome { margin-top: 0.75rem; font-size: 0.9rem; }
 .outcome.bad { color: var(--bad); }

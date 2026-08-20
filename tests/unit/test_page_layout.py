@@ -60,7 +60,15 @@ def test_no_cell_refuses_to_wrap():
 
 
 def test_long_unbroken_text_breaks_instead_of_stretching():
-    assert "overflow-wrap: anywhere" in _code("styles.css")
+    """`break-word`, deliberately not `anywhere`.
+
+    `anywhere` also shrinks a box's *minimum content width* to one character, so any
+    shrink-to-fit context inheriting it collapses. That is what turned the actions cell
+    into a vertical letter-stack. `break-word` wraps the same and leaves sizing alone.
+    """
+    css = _code("styles.css")
+    assert "overflow-wrap: break-word" in css
+    assert "overflow-wrap: anywhere" not in css
 
 
 # --- FR-002: the preview is clamped, and says so ---------------------------
@@ -91,6 +99,17 @@ def test_status_is_carried_by_text_not_only_colour():
 
 def test_the_actions_column_exists():
     assert "Actions" in _text("index.html")
+
+
+def test_the_actions_cell_does_not_reuse_the_upload_panels_class():
+    """`.actions` belongs to the upload panel and sets `display: flex` on whatever it hits.
+
+    Applied to a <td> it drops the cell out of table layout and collapses its contents.
+    The row's cell is `row-actions` for that reason.
+    """
+    js = _code("app.js")
+    assert 'className = "actions"' not in js
+    assert 'className = "row-actions"' in js
 
 
 def test_the_download_link_is_labelled_rather_than_named_after_the_file():

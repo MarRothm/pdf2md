@@ -28,6 +28,21 @@ page assets and assert the invariants in
 `GET /api/jobs/{job_id}` on an `already_converted` job returns an empty `outputs` and a populated
 `document_outputs` — the distinction the confirmation depends on.
 
+## Seeing it render
+
+The automated checks read the assets; they cannot tell you what the page looks like. A
+headless render is the cheap way to find out, and it is how the collapsed actions cell in
+1.3.0 was found:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --disable-gpu --virtual-time-budget=5000 \
+  --window-size=1280,1200 --screenshot=/tmp/page.png http://127.0.0.1:8080/
+```
+
+Add `--disk-cache-dir=/tmp/nc` when re-checking after an asset change, or the previous
+`app.js` and `styles.css` are served from cache and nothing appears to have changed.
+
 ## Running the page
 
 ```bash

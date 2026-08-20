@@ -296,7 +296,10 @@ function markIfClamped(cell, text, job) {
 
 function renderActions(job) {
   const cell = document.createElement("td");
-  cell.className = "actions";
+  cell.className = "row-actions";
+  const stack = document.createElement("div");
+  stack.className = "actions-inner";
+  cell.append(stack);
 
   if (job.download_url) {
     const link = document.createElement("a");
@@ -307,16 +310,16 @@ function renderActions(job) {
     link.textContent = "Download";
     link.title = job.output_filename || "";
     link.setAttribute("download", "");
-    cell.append(link);
+    stack.append(link);
   }
 
   const details = document.createElement("button");
   details.type = "button";
   details.textContent = "Details";
   details.addEventListener("click", () => showDetail(job.job_id));
-  cell.append(details);
+  stack.append(details);
 
-  cell.append(renderDeleteButton(job));
+  stack.append(renderDeleteButton(job));
   return cell;
 }
 
