@@ -40,7 +40,10 @@
   <section class="panel" aria-labelledby="status-heading">
     <div class="panel-head">
       <h2 id="status-heading">Documents</h2>
-      <div id="batch-progress" class="progress" aria-live="polite"></div>
+      <div class="head-right">
+        <div id="batch-progress" class="progress" aria-live="polite"></div>
+        <button type="button" id="clear-all" class="ghost danger-text" hidden>Clear the list</button>
+      </div>
     </div>
     <table class="jobs">
       <thead>

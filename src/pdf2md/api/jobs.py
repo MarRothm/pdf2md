@@ -9,11 +9,12 @@ from fastapi import APIRouter, Query, Request, Response
 from pdf2md.api import ApiError, db_of, storage_of
 from pdf2md.clock import now_iso, parse_iso
 from pdf2md.db import Database, JobView
-from pdf2md.deletion import DeletionRefused, UnknownJob, delete_document
+from pdf2md.deletion import DeletionRefused, UnknownJob, delete_document, delete_everything
 from pdf2md.logging_config import log_job
 from pdf2md.models import (
     DOWNLOADABLE_STATUSES,
     TERMINAL_STATUSES,
+    BulkDeletionResult,
     DeletionResult,
     JobDetail,
     JobListResponse,
@@ -115,6 +116,18 @@ async def download_markdown(request: Request, job_id: str) -> Response:
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{job.output_filename}"'},
     )
+
+
+@router.delete("", response_model=BulkDeletionResult)
+async def delete_all_jobs(request: Request) -> BulkDeletionResult:
+    """Remove every document, every entry, every output file, and every retained upload.
+
+    The clean slate (FR-027). Irreversible, and it takes successful conversions with it —
+    the Markdown in the outbox belongs to the documents being deleted. A document the
+    engine is converting is skipped and named in the response rather than blocking the
+    whole clear.
+    """
+    return delete_everything(db_of(request), storage_of(request))
 
 
 @router.delete("/{job_id}", response_model=DeletionResult)

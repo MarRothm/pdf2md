@@ -24,6 +24,7 @@ const el = {
   rows: document.getElementById("job-rows"),
   empty: document.getElementById("empty"),
   health: document.getElementById("health"),
+  clearAll: document.getElementById("clear-all"),
   modal: document.getElementById("modal"),
   modalTitle: document.getElementById("modal-title"),
   modalBody: document.getElementById("modal-body"),
@@ -155,6 +156,7 @@ function sortedJobs() {
 function render() {
   const jobs = sortedJobs();
   el.empty.hidden = jobs.length > 0;
+  el.clearAll.hidden = jobs.length === 0;
   el.rows.replaceChildren(...jobs.map(renderRow));
   renderBatchProgress(jobs);
   refreshOpenDetail();
@@ -592,6 +594,115 @@ async function performDelete(job, button) {
       },
     ]);
   }
+}
+
+el.clearAll.addEventListener("click", confirmClearAll);
+
+async function confirmClearAll() {
+  // Counted from the whole list, and stated before anything is destroyed: this removes
+  // successful conversions and their Markdown too, which is the part worth being sure of.
+  const jobs = sortedJobs();
+  const documents = new Set(jobs.map((job) => job.content_hash)).size;
+  const withOutput = jobs.filter((job) => job.output_filename).length;
+  openModal("Clear the whole list?", clearAllBody(jobs.length, documents, withOutput));
+}
+
+function clearAllBody(entries, documents, withOutput) {
+  const body = document.createElement("div");
+  body.className = "confirm";
+
+  const what = document.createElement("p");
+  what.append(
+    document.createTextNode("This removes all "),
+    countSpan(entries),
+    document.createTextNode(entries === 1 ? " entry" : " entries"),
+    document.createTextNode(", covering "),
+    countSpan(documents),
+    document.createTextNode(documents === 1 ? " document" : " documents"),
+    document.createTextNode(".")
+  );
+  body.append(what);
+
+  if (withOutput) {
+    const files = document.createElement("p");
+    files.append(
+      countSpan(withOutput),
+      document.createTextNode(
+        withOutput === 1
+          ? " converted document's Markdown is deleted from the output folder — successful conversions go too, not only the failures."
+          : " converted documents' Markdown is deleted from the output folder — successful conversions go too, not only the failures."
+      )
+    );
+    body.append(files);
+  } else {
+    body.append(messageBlock("No Markdown has been produced yet, so there is none to remove."));
+  }
+
+  body.append(messageBlock("Uploaded PDFs still held on the server are discarded as well."));
+
+  const warn = document.createElement("p");
+  warn.className = "warn";
+  warn.textContent = "This cannot be undone.";
+  body.append(warn);
+
+  const choices = document.createElement("div");
+  choices.className = "choices";
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", closeModal);
+
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "danger";
+  confirm.textContent = "Delete everything";
+  confirm.addEventListener("click", () => performClearAll(confirm));
+
+  choices.append(cancel, confirm);
+  body.append(choices);
+  requestAnimationFrame(() => cancel.focus());
+  return body;
+}
+
+function countSpan(value) {
+  const span = document.createElement("span");
+  span.className = "count";
+  span.textContent = String(value);
+  return span;
+}
+
+async function performClearAll(button) {
+  button.disabled = true;
+  button.textContent = "Deleting…";
+  let payload;
+  try {
+    const response = await fetch("/api/jobs", { method: "DELETE" });
+    if (!response.ok) throw new Error("failed");
+    payload = await response.json();
+  } catch (error) {
+    reportOutcome("The server could not be reached. Nothing was deleted.", true);
+    return;
+  }
+
+  forget(payload.job_ids);
+  refreshHealth();
+  closeModal();
+
+  const notes = [];
+  for (const entry of payload.skipped) {
+    notes.push({ filename: entry.filename, reason: `Kept — ${entry.reason}.` });
+  }
+  if (payload.kept_files.length) {
+    notes.push({
+      filename: "Output folder",
+      reason:
+        `${payload.kept_files.length} file(s) could not be deleted: ` +
+        `${payload.kept_files.join(", ")}. The output-folder count no longer matches the folder.`,
+    });
+  }
+  if (notes.length) showRejections(notes);
 }
 
 function forget(jobIds) {

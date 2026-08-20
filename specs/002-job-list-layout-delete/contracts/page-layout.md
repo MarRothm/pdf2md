@@ -116,8 +116,11 @@ regardless (FR-022).
 - **X1**: No `DELETE` is ever issued without a confirmation the operator accepted (FR-014, SC-007).
 - **X2**: Dismissing the confirmation by any means changes nothing on the server and nothing on
   the page (FR-015).
-- **X3**: The confirmation names one document. There is no select-all, no multi-select, and no
-  bulk control anywhere on the page (FR-026).
+- **X3**: A single deletion's confirmation names one document. There is no select-all and no
+  multi-select; the only bulk action is *Clear the list*, which is all-or-nothing and states
+  what it destroys (FR-026, FR-027).
+- **X7**: *Clear the list* is hidden while the list is empty, its confirmation states the entry
+  and document counts and that successful conversions go too, and Cancel is the default.
 - **X4**: The confirmation's file list comes from `document_outputs`, never from `outputs`.
   For an `already_converted` row the two differ, and `outputs` is empty — a confirmation built
   from it would promise to remove nothing while removing every section file of the document.
