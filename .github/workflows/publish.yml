@@ -24,12 +24,25 @@ jobs:
       packages: write
 
     steps:
-      # The pin is committed to `main`, not to the tag, so check out the branch rather
-      # than the detached tag ref.
+      # Check out the *tag*, because the tag is what is being released. An earlier version
+      # of this workflow checked out `main` so the pin commit had somewhere to go, which
+      # silently made `main` the build source: when a tag push landed and the matching
+      # `main` push did not, v1.6.0 was built from v1.5.0's code and published under the
+      # wrong version. The pin step switches to `main` after the build instead.
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
+
+      # A release that is not on `main` is a release nobody can reproduce from the branch.
+      # Fail before building rather than publishing something main does not contain.
+      - name: Refuse to release a commit that is not on main
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at a commit that is not on main." \
+                 "Push main first, then re-create the tag."
+            exit 1
+          fi
 
       # The owner is `MarRothm`, but OCI repository names must be lowercase — passing
       # `github.repository_owner` through unchanged makes the reference invalid and the
@@ -64,6 +77,14 @@ jobs:
           push: true
           tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
           provenance: false
+
+      # Move to the branch the pin belongs on *before* editing the file — the image is
+      # already built from the tag, so nothing here can change what was published, and the
+      # edit has to be made on the branch that will carry it.
+      - name: Switch to main for the pin commit
+        run: |
+          git fetch --quiet origin main
+          git checkout -B main origin/main
 
       # The stack file is the single place the digest lives. Writing it here is what makes
       # a release one decision (tag it) instead of one decision plus a transcription.
