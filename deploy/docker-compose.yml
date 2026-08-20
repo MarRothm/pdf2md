@@ -16,7 +16,7 @@
 
 services:
   web:
-    image: ${WEB_IMAGE:-ghcr.io/marrothm/pdf2md-web:1.3.0@sha256:8710d364538315f9bad6fc40a4519f4e0d23e72b89b28dfbcf4f4b818c8f92b0}
+    image: ${WEB_IMAGE:-ghcr.io/marrothm/pdf2md-web:1.4.0@sha256:52d56ef20971cf7cb8333d9b43f912c95d171b2414458a53dac1465627041010}
     pull_policy: missing
     restart: unless-stopped
     ports:
