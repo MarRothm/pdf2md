@@ -57,8 +57,10 @@ can remove.
 - **INV-2**: A deletion unlinks only paths derived from `markdown_output` rows of that hash and
   the two inbox name patterns for that hash. No directory scan, no glob over the outbox, no path
   taken from a request. (FR-017, SC-008)
-- **INV-3**: A document with any job in `IN_FLIGHT_STATUSES` (`queued`, `submitted`, `running`)
-  is never deleted, whichever of its jobs the request named. (FR-019, FR-022)
+- **INV-3**: A document with any job in `CONVERTING_STATUSES` (`submitted`, `running`) is
+  never deleted, whichever of its jobs the request named. `queued` deliberately does not
+  block: no engine task exists for it, so no result can arrive after the row is gone, and a
+  job the dispatcher never claims must stay removable. (FR-019, FR-022)
 - **INV-4**: A missing file is not an error. `unlink(missing_ok=True)` throughout. (FR-020)
 - **INV-5**: The deletion is all-or-nothing in the database and best-effort on the filesystem.
   If a file cannot be unlinked, the rows are still removed, the response names the files left

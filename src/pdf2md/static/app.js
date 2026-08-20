@@ -438,6 +438,10 @@ function formatTime(value) {
 // --- deletion (feature 002) -----------------------------------------------
 
 const IN_FLIGHT = new Set(["queued", "submitted", "running"]);
+// Only these block a delete. A queued job has never reached the engine, so removing its
+// row simply takes it out of the queue — and a job the dispatcher never picks up has to
+// stay removable.
+const CONVERTING = new Set(["submitted", "running"]);
 
 function siblingsOf(job) {
   // Every conversion of the same document that this page currently knows about.
@@ -450,12 +454,12 @@ function renderDeleteButton(job) {
   button.className = "delete";
   button.textContent = "Delete";
 
-  const busy = siblingsOf(job).find((other) => IN_FLIGHT.has(other.status));
+  const busy = siblingsOf(job).find((other) => CONVERTING.has(other.status));
   if (busy) {
     // Visible but unavailable, with the reason: an absent control is indistinguishable
     // from the feature being missing (FR-019). The server refuses it too (FR-022).
     button.disabled = true;
-    button.title = `"${job.filename}" is still converting. Wait for it to finish, then delete it.`;
+    button.title = `"${job.filename}" is being converted right now. Wait for it to finish, then delete it.`;
     return button;
   }
 

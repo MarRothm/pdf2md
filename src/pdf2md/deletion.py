@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 
 from pdf2md.db import Database
-from pdf2md.models import IN_FLIGHT_STATUSES, ConversionJob, DeletionResult
+from pdf2md.models import CONVERTING_STATUSES, ConversionJob, DeletionResult
 from pdf2md.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def delete_document(db: Database, storage: Storage, job_id: str) -> DeletionResu
         raise UnknownJob(job_id)
 
     siblings = db.jobs_for_hash(job.content_hash)
-    _refuse_if_in_flight(job, siblings)
+    _refuse_if_converting(job, siblings)
 
     # Only names this service recorded as its own output. Never a directory scan, never a
     # path from the request (INV-2).
@@ -78,15 +78,21 @@ def delete_document(db: Database, storage: Storage, job_id: str) -> DeletionResu
     )
 
 
-def _refuse_if_in_flight(job: ConversionJob, siblings: list[ConversionJob]) -> None:
-    """Refuse while *any* conversion of the document is unfinished.
+def _refuse_if_converting(job: ConversionJob, siblings: list[ConversionJob]) -> None:
+    """Refuse while a conversion of the document is *with the engine*.
 
-    Not merely the one named. A document can have a finished job and a retry in flight at
-    the same time, and deleting on the strength of the finished one lets the dispatcher
-    write the retry's Markdown into an outbox the operator believes they emptied (FR-022).
+    Not merely the one named: a document can have a finished job and a retry running at the
+    same time, and deleting on the strength of the finished one lets the dispatcher write
+    the retry's Markdown into an outbox the operator believes they emptied (FR-022).
+
+    `queued` deliberately does not block. A queued job has never been handed to the engine,
+    so there is no result on its way back — deleting its row is what removes it from the
+    queue. Blocking on `queued` made a job the dispatcher never picked up impossible to
+    remove from the page at all, which is the opposite of what the refusal is for.
     """
-    if not any(sibling.status in IN_FLIGHT_STATUSES for sibling in siblings):
+    if not any(sibling.status in CONVERTING_STATUSES for sibling in siblings):
         return
     raise DeletionRefused(
-        f'"{job.submitted_filename}" is still converting. Wait for it to finish, then delete it.'
+        f'"{job.submitted_filename}" is being converted right now. '
+        "Wait for it to finish, then delete it."
     )

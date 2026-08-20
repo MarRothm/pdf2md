@@ -85,8 +85,9 @@ it — all from the element itself (FR-010).
 
 ## The deletion flow
 
-Four steps, no shortcuts. For a row whose document has a conversion in flight — judged from the
-statuses of the rows sharing its `content_hash` — the Delete control is **rendered and disabled**,
+Four steps, no shortcuts. For a row whose document has a conversion at the engine (`submitted` or
+`running`, never merely `queued`) — judged from the statuses of the rows sharing its
+`content_hash` — the Delete control is **rendered and disabled**,
 with the reason in its `title` and in its accessible description: the operator can see that
 deletion exists and why it is not available yet (FR-019). The server refuses such a deletion
 regardless (FR-022).

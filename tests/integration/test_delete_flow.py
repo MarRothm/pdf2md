@@ -132,6 +132,8 @@ async def test_a_document_with_a_retry_in_flight_is_protected(
 
     retry = (await client.post(f"/api/jobs/{failed}/retry")).json()
     assert retry["status"] == "queued"
+    # Queued does not protect the document — only a conversion actually at the engine does.
+    db.mark_submitted(retry["job_id"], "task-1", 0)
 
     response = await client.delete(f"/api/jobs/{failed}")
     assert response.status_code == 409

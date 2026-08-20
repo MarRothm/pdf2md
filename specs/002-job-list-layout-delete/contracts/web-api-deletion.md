@@ -97,15 +97,20 @@ correct.
 The database rows are gone regardless, so the service's records match what it can still see. The
 page reports the partial outcome and names the surviving files (FR-018).
 
-**409** `still_converting` — a conversion of this document is queued, submitted, or running.
-Checked across every job of the document, not just the one named, so a retry running out of view
-cannot write its output into an outbox the operator believes they emptied (FR-022).
+**409** `still_converting` — a conversion of this document is submitted or running, meaning the
+engine holds it. Checked across every job of the document, not just the one named, so a retry
+running out of view cannot write its output into an outbox the operator believes they emptied
+(FR-022).
+
+**`queued` does not refuse.** A waiting job has no engine task, so deleting its row is what takes
+it out of the queue. This matters most when the dispatcher has stopped claiming work: the entry
+stays removable instead of becoming permanent.
 
 ```json
 {
   "error": {
     "code": "still_converting",
-    "message": "\"annual-report.pdf\" is still converting. Wait for it to finish, then delete it."
+    "message": "\"annual-report.pdf\" is being converted right now. Wait for it to finish, then delete it."
   }
 }
 ```

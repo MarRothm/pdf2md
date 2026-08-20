@@ -90,8 +90,23 @@ async def test_delete_reports_every_entry_of_the_document(convert, client):
     assert set(body["job_ids"]) == {first, second}
 
 
-async def test_deleting_a_conversion_still_in_flight_is_refused(upload, client):
+async def test_deleting_a_queued_conversion_is_allowed(upload, client):
+    """A queued job has never reached the engine, so its row is all there is to remove.
+
+    Blocking this made a job the dispatcher never picked up impossible to clear from the
+    page — which is exactly when an operator most needs to clear it.
+    """
     job_id = (await upload(("report.pdf", pdf_bytes(b"a")))).json()["accepted"][0]["job_id"]
+
+    response = await client.delete(f"/api/jobs/{job_id}")
+    assert response.status_code == 200
+    assert response.json()["job_ids"] == [job_id]
+    assert (await client.get("/api/jobs")).json()["jobs"] == []
+
+
+async def test_deleting_a_conversion_at_the_engine_is_refused(upload, client, db):
+    job_id = (await upload(("report.pdf", pdf_bytes(b"a")))).json()["accepted"][0]["job_id"]
+    db.mark_submitted(job_id, "task-1", 0)
 
     response = await client.delete(f"/api/jobs/{job_id}")
     assert response.status_code == 409
