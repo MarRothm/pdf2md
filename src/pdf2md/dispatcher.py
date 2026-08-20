@@ -54,6 +54,14 @@ TIMEOUT_REASON_TEMPLATE = (
     "This document was still converting after {minutes} minutes and was stopped. "
     "It may be very large or unusually complex."
 )
+PART_TIMEOUT_REASON = (
+    "These pages were still converting after the time limit, even on their own. "
+    "They are probably scans of unusually dense pages."
+)
+PART_LOST_REASON = (
+    "The converter lost these pages before their result could be saved, and they could "
+    "not be converted again."
+)
 
 MAINTENANCE_INTERVAL_SECONDS = 600
 
@@ -307,9 +315,7 @@ class Dispatcher:
             try:
                 poll = await self.engine.poll(part.engine_task_id)
             except TaskNotFoundError:
-                self.db.finish_part(
-                    part.id, PartStatus.FAILED, failure_reason="the engine forgot this task"
-                )
+                self._retry_part(job, part, PART_LOST_REASON, reason_log="engine forgot the task")
                 continue
             except EngineUnavailableError:
                 return
@@ -317,9 +323,7 @@ class Dispatcher:
             if poll.task_status is TaskStatus.STARTED and part.status is not PartStatus.RUNNING:
                 self.db.mark_part_running(part.id)
             elif poll.task_status is TaskStatus.FAILURE:
-                self.db.finish_part(
-                    part.id, PartStatus.FAILED, failure_reason="the engine reported a failure"
-                )
+                await self._part_failed_at_engine(job, part)
             elif poll.task_status is TaskStatus.SUCCESS:
                 await self._fetch_part(job, part)
 
@@ -351,14 +355,17 @@ class Dispatcher:
         try:
             result = await self.engine.fetch_result(part.engine_task_id)
         except (EngineUnavailableError, TaskNotFoundError):
-            self.db.finish_part(part.id, PartStatus.FAILED, failure_reason=LOST_RESULT_REASON)
+            # A whole document in this position has to be uploaded again, because only the
+            # person who sent it can do that. A part does not: its pages are still in the
+            # inbox, so the honest response is to convert them again (FR-038).
+            self._retry_part(job, part, PART_LOST_REASON, reason_log="result was lost")
             return
 
         if not result_is_successful(result):
             reason = DoclingClient.failure_reason_from(
                 engine_status=result.status, errors=result.errors
             )
-            self.db.finish_part(part.id, PartStatus.FAILED, failure_reason=reason)
+            self._retry_part_smaller(job, part, reason, reason_log="engine returned a failure")
             return
 
         self.db.finish_part(part.id, PartStatus.SUCCEEDED, markdown=result.markdown)
@@ -369,6 +376,106 @@ class Dispatcher:
             filename=job.submitted_filename,
             part=part.ordinal,
             pages=f"{part.first_page}-{part.last_page}",
+        )
+
+    # --- keeping a part alive (FR-038) ------------------------------------
+
+    async def _part_failed_at_engine(self, job: ConversionJob, part: ConversionPart) -> None:
+        """A part the engine reports as failed: ask why, then try it in smaller pieces.
+
+        The whole-document path already fetches the engine's own words before deciding
+        what to tell the user; a part that skipped that step reported every failure as the
+        same sentence, which is how a document ends up saying *pages are missing* with no
+        way to find out what happened to them.
+        """
+        errors = await self._part_failure_detail(part)
+        reason = DoclingClient.failure_reason_from(engine_status="failure", errors=errors)
+        self._retry_part_smaller(job, part, reason, reason_log="engine reported a failure")
+
+    async def _part_failure_detail(self, part: ConversionPart) -> list[str]:
+        """The engine's errors for a failed part. Nothing is lost by consuming the result:
+        a failed task has no Markdown to serve, and the part is being retried or given up
+        on either way (research.md R3)."""
+        if not part.engine_task_id:
+            return []
+        try:
+            result = await self.engine.fetch_result(part.engine_task_id)
+        except (TaskNotFoundError, EngineUnavailableError):
+            return []
+        return result.errors
+
+    def _retry_part(
+        self, job: ConversionJob, part: ConversionPart, reason: str, *, reason_log: str
+    ) -> None:
+        """Convert the same pages again, or give up on them once the attempts are spent."""
+        if part.attempt >= self.settings.part_max_attempts:
+            self.db.finish_part(part.id, PartStatus.FAILED, failure_reason=reason)
+            self._log_part_gap(job, part, reason_log)
+            return
+        self.db.requeue_part(part.id)
+        log_job(
+            logger,
+            "part_requeued",
+            job_id=job.id,
+            filename=job.submitted_filename,
+            part=part.ordinal,
+            pages=f"{part.first_page}-{part.last_page}",
+            attempt=part.attempt + 1,
+            reason=reason_log,
+        )
+
+    def _retry_part_smaller(
+        self,
+        job: ConversionJob,
+        part: ConversionPart,
+        reason: str,
+        *,
+        reason_log: str,
+        status: PartStatus = PartStatus.FAILED,
+    ) -> None:
+        """Halve a part that could not be converted and try both halves (FR-038).
+
+        This is what turns the failure the operator actually met — every hundred-page part
+        of a long scan running past the engine's time ceiling, leaving a document that was
+        nothing but gaps — into a document that converts. It is bounded by `split_depth`,
+        because each attempt costs another timeout's worth of engine time, and by
+        `part_min_pages`, because below that the pages are the problem, not their number.
+        """
+        pages = part.last_page - part.first_page + 1
+        if (
+            part.split_depth >= self.settings.part_retry_splits
+            or pages <= self.settings.part_min_pages
+            or pages < 2
+        ):
+            self.db.finish_part(part.id, status, failure_reason=reason)
+            self._log_part_gap(job, part, reason_log)
+            return
+
+        midpoint = part.first_page + pages // 2 - 1
+        self.storage.delete_part_file(job.content_hash, part.ordinal)
+        self.db.split_part(part.id, [(part.first_page, midpoint), (midpoint + 1, part.last_page)])
+        log_job(
+            logger,
+            "part_halved",
+            job_id=job.id,
+            filename=job.submitted_filename,
+            part=part.ordinal,
+            pages=f"{part.first_page}-{part.last_page}",
+            reason=reason_log,
+        )
+
+    def _log_part_gap(self, job: ConversionJob, part: ConversionPart, reason_log: str) -> None:
+        log_job(
+            logger,
+            "part_failed",
+            job_id=job.id,
+            filename=job.submitted_filename,
+            level=logging.WARNING,
+            part=part.ordinal,
+            pages=f"{part.first_page}-{part.last_page}",
+            attempt=part.attempt,
+            outcome="missing",
+            reason=reason_log,
         )
 
     def _all_parts_terminal(self, job_id: str) -> bool:
@@ -735,11 +842,6 @@ class Dispatcher:
             age = (moment - parse_iso(started)).total_seconds()
             if age < limit:
                 continue
-            self.db.finish_part(
-                part.id,
-                PartStatus.TIMED_OUT,
-                failure_reason=TIMEOUT_REASON_TEMPLATE.format(minutes=round(limit / 60)),
-            )
             log_job(
                 logger,
                 "part_timed_out",
@@ -749,6 +851,13 @@ class Dispatcher:
                 part=part.ordinal,
                 pages=f"{part.first_page}-{part.last_page}",
                 age_seconds=round(age),
+            )
+            self._retry_part_smaller(
+                job,
+                part,
+                PART_TIMEOUT_REASON,
+                reason_log="ran out of time",
+                status=PartStatus.TIMED_OUT,
             )
         if self._all_parts_terminal(job.id):
             self.finish_split_job(job)
@@ -779,7 +888,9 @@ def _join_parts(parts: list[ConversionPart]) -> str:
     the knowledge base forever (FR-035).
     """
     pieces: list[str] = []
-    for part in sorted(parts, key=lambda part: part.ordinal):
+    # By first page, not by ordinal: a part halved after running out of time appends its
+    # replacements at the end of the table, and they belong where their pages are (FR-038).
+    for part in sorted(parts, key=lambda part: part.first_page):
         if part.status is PartStatus.SUCCEEDED and part.markdown is not None:
             pieces.append(part.markdown)
         else:

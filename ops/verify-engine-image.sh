@@ -60,6 +60,32 @@ else
 fi
 
 echo
+echo "== the configured recognition language must be servable from those models =="
+# The stack asks for a language (FR-039) and the container cannot download anything, so
+# the weights that serve it have to be here already. EasyOCR's `latin_g2` is the model
+# every Latin-script language resolves to, and `craft` is the detector it needs. This is
+# the German equivalent of the slim-image check above: without them, scanned pages come
+# back in the wrong alphabet rather than failing.
+preset="$(grep -o 'PDF2MD_OCR_PRESET:.*' "$COMPOSE" | head -n1 | sed 's/.*:-//; s/}.*//')"
+if [ "${preset:-auto}" = "easyocr" ]; then
+  easyocr="$(docker exec "$DOCLING" sh -c "ls -A '${ARTIFACTS_PATH}/EasyOcr' 2>/dev/null" || true)"
+  missing=""
+  echo "$easyocr" | grep -qi 'latin_g2' || missing="latin_g2"
+  echo "$easyocr" | grep -qi 'craft'    || missing="${missing:+${missing}, }craft"
+  if [ -z "$missing" ]; then
+    echo "  ok    EasyOcr carries craft and latin_g2 — Latin-script languages are servable"
+  else
+    echo "  FAIL  EasyOcr is missing: ${missing}"
+    echo "        PDF2MD_OCR_PRESET=easyocr would fail on every scanned page, because"
+    echo "        the weights cannot be fetched from inside this container."
+    failures=$((failures + 1))
+  fi
+else
+  echo "  note  PDF2MD_OCR_PRESET is '${preset:-auto}': the engine chooses, and its own"
+  echo "        default reads English and Chinese. German scans lose their umlauts."
+fi
+
+echo
 if [ "$failures" -eq 0 ]; then
   echo "PASS — the deployed engine matches the pin and carries its own models."
   exit 0

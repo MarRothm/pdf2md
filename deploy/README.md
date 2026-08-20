@@ -155,7 +155,7 @@ after a release.** Skipping two releases in a row makes the image on the Mac min
 unobtainable, so a host rebuild at that version becomes impossible.
 
 Only the web image moves this way. The engine is upstream and pinned separately; upgrading
-it is a bigger decision because it changes layout analysis (§10).
+it is a bigger decision because it changes layout analysis (§11).
 
 To see whether anything is waiting for a release: `git log --oneline $(git describe --tags --abbrev=0)..HEAD`
 
@@ -189,10 +189,18 @@ anything, and the third case — a document too long for any of it — is refuse
 
 | Document | What happens |
 |---|---|
-| Up to `PDF2MD_PART_MAX_PAGES` (100) | Converted whole, exactly as before |
+| Up to `PDF2MD_PART_MAX_PAGES` (40) | Converted whole, exactly as before |
 | Longer than that | Split into page ranges, converted a couple at a time, and joined back into one document. The page shows *Converting — part 7 of 20* |
 | Longer than `PDF2MD_MAX_TOTAL_PAGES` (10,000) | **Refused at upload**, in a second, for its length — with the suggestion to split it. Never described as damaged |
 | Password-protected, or structurally unreadable | Also refused at upload now, rather than after a conversion attempt |
+
+**A part that fails is tried again before it becomes a gap.** A page range that runs out
+of time, or that the engine reports as failed, is halved and converted as two smaller
+ranges — up to `PDF2MD_PART_RETRY_SPLITS` (2) times, never below `PDF2MD_PART_MIN_PAGES`
+(10). A part whose task or result the engine loses — an engine restart, mid-document — is
+simply converted again, up to `PDF2MD_PART_MAX_ATTEMPTS` (3) times. Only when those are
+spent is the range reported missing, and the detail view then names the range, the number
+of attempts, and the engine's own reason.
 
 **If one part fails, the rest are still written.** The document reports *Converted — pages
 N–M are missing*, and the gap is marked inside the Markdown as well as on the page. That
@@ -214,14 +222,52 @@ wrote, only for the document being re-converted. Without it, an engine upgrade t
 detects headings differently would leave two contradictory versions of the same document
 for AnythingLLM to cite.
 
-**The part size is a starting value, not a measurement.** `PDF2MD_PART_MAX_PAGES=100` is
-sized to the engine's 40-minute per-document ceiling with a safety factor. Measure seconds
-per page on your own corpus and set it properly — the same discipline as
-`DOCLING_MEM_LIMIT`.
+**The part size is sized to time, not to pages.** `DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT` is
+2400 seconds *per submission*, so `PDF2MD_PART_MAX_PAGES` is really a per-page time budget:
+40 pages allows 60 seconds a page. That is deliberately generous, because the number that
+matters is not the ~10 seconds a born-digital page takes but the far larger number a
+scanned page costs when OCR runs on a CPU-only engine whose threads are shared with a
+second worker. The earlier default of 100 assumed the smaller number, and a long scan lost
+*every* full part to the ceiling — a document reporting *Converted* with almost nothing in
+it. Measure seconds per page on your own corpus and set it properly; the retry above is a
+safety net, not a substitute, since every part it rescues costs the engine a full timeout
+first.
 
 ---
 
-## 6. Health and logs
+## 6. Recognition language
+
+Scanned pages are read by an OCR engine; pages that carry their own text layer are not
+touched by it, so this section only affects scans.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PDF2MD_OCR_PRESET` | `easyocr` | Which recognition engine. `auto` lets the image choose |
+| `PDF2MD_OCR_LANG` | `de,en` | Recognition languages, comma-separated |
+
+**Why not `auto`.** The image's automatic choice is RapidOCR, whose bundled weights read
+English and Chinese. German comes back stripped of its umlauts — and a word that was never
+recognised is a word AnythingLLM can never match. `easyocr` is the one alternative that
+needs nothing added to the image: its `craft` and `latin_g2` weights are baked into the
+pinned tag by the upstream build, and `latin_g2` is a Latin-script model that covers German.
+
+`ops/verify-engine-image.sh` checks this on the running stack: it now also reports whether
+the `craft` and `latin_g2` weights are actually inside the deployed engine. Run it once
+after the upgrade, before converting anything long.
+
+**Any language set here must be one those weights can serve.** Nothing is downloaded at
+runtime (FR-022), by design — the stack has no route to the internet. A language the image
+cannot serve fails at conversion with the engine's own message, rather than quietly
+recognising the wrong alphabet.
+
+**It costs throughput.** EasyOCR is slower per page than the automatic choice, and that
+lands on the part-size budget above: the ceiling that decides whether a part converts or
+becomes a gap is a *time* limit. If long scans start reporting missing pages, lower
+`PDF2MD_PART_MAX_PAGES` before anything else.
+
+---
+
+## 7. Health and logs
 
 - **Portainer's health column** reflects real checks: `/healthz` on the web service and
   the engine's own health endpoint (FR-018).
@@ -237,7 +283,7 @@ queue and convert when the engine returns.
 
 ---
 
-## 7. How the isolation works, and how to prove it
+## 8. How the isolation works, and how to prove it
 
 Isolation here is a property of the stack file, not a promise or a host firewall rule.
 That matters because a Portainer redeploy carries the stack file with it and would not
@@ -302,7 +348,7 @@ not be immediately open to the network.
 
 ---
 
-## 8. Importing into AnythingLLM
+## 9. Importing into AnythingLLM
 
 Delivery into AnythingLLM is deliberately manual — the stack writes files, you decide
 when to ingest them.
@@ -348,7 +394,7 @@ accident.
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
@@ -356,14 +402,16 @@ accident.
 | Deploy fails resolving the stack file | Wrong compose path or reference on the Repository form | The path is `deploy/docker-compose.yml`, relative to the repository root |
 | Engine never reaches healthy | Models missing from the image, or the warm-up is slower than the start period | `ops/verify-engine-image.sh`; the engine log for a download attempt |
 | Conversions work but the page is unreachable from the LAN | The networks were consolidated onto `internal` — published ports do not work there | `docker network inspect`; see research.md R1 |
+| Scanned German comes back without umlauts, or as nonsense | Recognition is running in the wrong language | `PDF2MD_OCR_PRESET` must name `easyocr`; `auto` reads English and Chinese only |
 | Host becomes sluggish under a batch | Engine memory or thread count too high | Lower `DOCLING_WORKERS`, keep `SHARE_MODELS` true, tighten `DOCLING_MEM_LIMIT` |
 | A job sits at Converting forever | The watchdog is above the engine's own timeout | `PDF2MD_JOB_TIMEOUT_SECONDS` must stay above `DOCLING_MAX_DOCUMENT_TIMEOUT`, and both must be finite |
+| A long document converts but reports missing pages | Parts are outrunning the engine's per-document ceiling | Open the row's detail view: it names each missing range and why. `part_timed_out` and `part_halved` in the `web` log give the seconds per page; lower `PDF2MD_PART_MAX_PAGES` to match |
 | Database errors after a redeploy | SQLite was moved onto a bind mount | It belongs on the named volume |
 | The stack redeployed on its own | GitOps updates were switched on | Turn them off; the deployed version is meant to change only when a person decides it should |
 
 ---
 
-## 10. Version pinning, and what has been verified
+## 11. Version pinning, and what has been verified
 
 Both images are pinned by tag **and** digest. The tag is for humans; the digest is the
 actual pin, because a tag can be re-pointed upstream and a digest cannot.
@@ -399,7 +447,7 @@ shows up there and nowhere else.
 
 ---
 
-## 11. Measurements to record here
+## 12. Measurements to record here
 
 These come from the deployed stack and belong in this file once run, so the next person
 inherits numbers rather than assumptions.

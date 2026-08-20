@@ -33,6 +33,25 @@ services:
       PDF2MD_INBOX_RETENTION_HOURS: ${PDF2MD_INBOX_RETENTION_HOURS:-48}
       PDF2MD_FAILED_INBOX_RETENTION_DAYS: ${PDF2MD_FAILED_INBOX_RETENTION_DAYS:-14}
       PDF2MD_SUSPECT_MIN_CHARS_PER_PAGE: ${PDF2MD_SUSPECT_MIN_CHARS_PER_PAGE:-50}
+      # Text recognition, for scanned pages only — a born-digital page keeps its own text.
+      # `auto` would pick RapidOCR, whose bundled weights are English and Chinese: German
+      # comes back without its umlauts. `easyocr` needs nothing extra — its `craft` and
+      # `latin_g2` models are baked into the pinned engine image, and `latin_g2` is a
+      # Latin-script model that covers German. Any language set here must be satisfiable
+      # from those weights; nothing can be downloaded at runtime (FR-022, FR-039).
+      PDF2MD_OCR_PRESET: ${PDF2MD_OCR_PRESET:-easyocr}
+      PDF2MD_OCR_LANG: ${PDF2MD_OCR_LANG:-de,en}
+      # Splitting. The part size is sized to the engine's *time* ceiling above, not to a
+      # page count: a part that outruns DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT is a hole in
+      # the finished document. A part that runs out of time anyway is halved and tried
+      # again, up to PART_RETRY_SPLITS times and never below PART_MIN_PAGES.
+      PDF2MD_PART_MAX_PAGES: ${PDF2MD_PART_MAX_PAGES:-40}
+      PDF2MD_PART_RETRY_SPLITS: ${PDF2MD_PART_RETRY_SPLITS:-2}
+      PDF2MD_PART_MIN_PAGES: ${PDF2MD_PART_MIN_PAGES:-10}
+      PDF2MD_PART_MAX_ATTEMPTS: ${PDF2MD_PART_MAX_ATTEMPTS:-3}
+      PDF2MD_PARTS_IN_FLIGHT: ${PDF2MD_PARTS_IN_FLIGHT:-2}
+      PDF2MD_MAX_TOTAL_PAGES: ${PDF2MD_MAX_TOTAL_PAGES:-10000}
+      PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES: ${PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES:-1048576}
       PDF2MD_JOB_HISTORY_DAYS: ${PDF2MD_JOB_HISTORY_DAYS:-30}
       PDF2MD_MIN_FREE_BYTES: ${PDF2MD_MIN_FREE_BYTES:-67108864}
       PDF2MD_ENGINE_WORKERS: ${DOCLING_WORKERS:-2}

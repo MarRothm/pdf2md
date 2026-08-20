@@ -362,6 +362,29 @@ function renderDetailDialog(detail) {
   }
   body.append(facts);
 
+  const missing = detail.missing_parts || [];
+  if (missing.length) {
+    // A gap with no reason attached is the same sentence whether the engine ran out of
+    // time or the pages were unreadable — and only one of those has an answer.
+    const heading = document.createElement("p");
+    heading.textContent =
+      missing.length === 1 ? "Missing pages" : `Missing pages (${missing.length} ranges)`;
+    body.append(heading);
+    const list = document.createElement("ul");
+    list.className = "detail-files";
+    for (const part of missing) {
+      const item = document.createElement("li");
+      const pages =
+        part.first_page === part.last_page
+          ? `Page ${part.first_page}`
+          : `Pages ${part.first_page}\u2013${part.last_page}`;
+      const attempts = part.attempts > 1 ? ` (${part.attempts} attempts)` : "";
+      item.textContent = `${pages}${attempts}: ${part.failure_reason || "no reason recorded"}`;
+      list.append(item);
+    }
+    body.append(list);
+  }
+
   const files = detail.document_outputs || [];
   if (files.length) {
     const heading = document.createElement("p");

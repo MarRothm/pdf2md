@@ -121,6 +121,8 @@ class StubEngine:
             from_formats: list[str] = Form(default=[]),
             to_formats: list[str] = Form(default=[]),
             do_ocr: str = Form(default="false"),
+            ocr_preset: str = Form(default="auto"),
+            ocr_lang: list[str] = Form(default=[]),
         ) -> JSONResponse:
             self._check_key(request)
             payload = await files.read()
@@ -131,6 +133,8 @@ class StubEngine:
                     "from_formats": from_formats,
                     "to_formats": to_formats,
                     "do_ocr": do_ocr,
+                    "ocr_preset": ocr_preset,
+                    "ocr_lang": ocr_lang,
                 }
             )
             behavior = self.behavior_for(files.filename or "")

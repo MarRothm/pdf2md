@@ -8,7 +8,7 @@ Reachable only at `http://docling:5001` on the `core` internal network. Never pu
 
 | Step | Call | Notes |
 |---|---|---|
-| Submit | `POST /v1/convert/file/async` | multipart; `files`, `from_formats=pdf`, `to_formats=md`, `do_ocr=true` |
+| Submit | `POST /v1/convert/file/async` | multipart; `files`, `from_formats=pdf`, `to_formats=md`, `do_ocr=true`, and — only when configured — `ocr_preset` and one `ocr_lang` field per language (FR-039) |
 | Poll | `GET /v1/status/poll/{task_id}` | returns `task_status`, `task_position` |
 | Fetch | `GET /v1/result/{task_id}` | returns the document payload |
 | Health | `GET /ready` | **RESOLVED (O1)** — verified against the pinned tag's source: `/ready` answers 503 until the models are loaded, `/health` only reports that the process is up, and neither requires the API key. The container healthcheck and our own reachability check both use `/ready`; `/livez` and `/version` also exist. |
@@ -74,3 +74,19 @@ Only `md_content` is requested, so the other content fields come back empty. Tha
 ## Version pinning
 
 The engine image is pinned by exact tag and digest, never `latest`, in `deploy/docker-compose.yml`. Upgrading is a deliberate act, never an automatic one (FR-032): pick the new tag, resolve its `linux/arm64` digest, verify the artifacts directory in the new image is populated (research.md R4), commit the change, and redeploy. `docling-serve-slim` variants, which skip model weights, are incompatible with this deployment. An upgrade also changes layout analysis, so `ops/measure-fidelity.py` is part of accepting one.
+
+
+## Recognition options (FR-039)
+
+`ocr_preset` and `ocr_lang` are sent only when the deployment sets them, so an unconfigured
+service submits byte-for-byte the request it always did. Verified against the pinned engine
+(docling-serve v1.18.0 → docling 2.93.0, docling-jobkit 1.18.1):
+
+- `ocr_preset` defaults to `auto`; `ocr_engine` is the deprecated spelling of the same field
+  and is not used here. `ocr_lang` is a list and overrides whatever the preset carries.
+- `ocr_preset` and `ocr_custom_config` are mutually exclusive; `ocr_custom_config` is not used.
+- `force_ocr` is left at its default of `false`: a page with a text layer keeps it, so naming
+  a language cannot degrade a born-digital document.
+- A preset naming an engine the image does not have raises at submission, which surfaces as
+  an ordinary engine failure with the engine's own words attached — the visible failure
+  FR-039 asks for, rather than silent recognition in the wrong alphabet.

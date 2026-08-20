@@ -117,10 +117,14 @@ class DoclingClient:
         connect_timeout: float = 10.0,
         read_timeout: float = 120.0,
         health_path: str = "/ready",
+        ocr_preset: str = "auto",
+        ocr_languages: list[str] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.health_path = health_path
+        self.ocr_preset = ocr_preset
+        self.ocr_languages = ocr_languages or []
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             transport=transport,
@@ -145,9 +149,23 @@ class DoclingClient:
     # --- calls ------------------------------------------------------------
 
     async def submit(self, filename: str, payload: bytes) -> SubmittedTask:
-        """`POST /v1/convert/file/async`, with every option sent explicitly."""
+        """`POST /v1/convert/file/async`, with every option sent explicitly.
+
+        `ocr_preset` and `ocr_lang` are sent only when configured, so an unset deployment
+        submits exactly the request it always did and takes the engine's own defaults
+        (FR-039). `force_ocr` is left off deliberately: a born-digital page keeps its own
+        text layer, and only bitmap regions are recognised.
+        """
         files = {"files": (filename, payload, "application/pdf")}
-        data = {"from_formats": ["pdf"], "to_formats": ["md"], "do_ocr": "true"}
+        data: dict[str, object] = {
+            "from_formats": ["pdf"],
+            "to_formats": ["md"],
+            "do_ocr": "true",
+        }
+        if self.ocr_preset and self.ocr_preset != "auto":
+            data["ocr_preset"] = self.ocr_preset
+        if self.ocr_languages:
+            data["ocr_lang"] = self.ocr_languages
         body = await self._request("POST", "/v1/convert/file/async", files=files, data=data)
         return SubmittedTask(
             task_id=str(body["task_id"]),

@@ -50,12 +50,37 @@ class Settings(BaseSettings):
     job_history_days: int = 30
 
     # --- splitting (FR-033 through FR-037) --------------------------------
-    part_max_pages: int = 100
+    part_max_pages: int = 40
     """Documents longer than this are converted in parts (FR-034).
 
-    Sized to the engine's *time* ceiling, not its page ceiling: at 10s/page a part takes
-    ~1000s against DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT of 2400s. A value chosen to sit just
-    under the 2000-page limit would time out instead (research.md R12).
+    Sized to the engine's *time* ceiling, not its page ceiling: a part that outruns
+    DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT (2400s) is a hole in the finished document, so the
+    first attempt has to fit with room to spare. 40 pages allows 60s a page — a scanned
+    page with OCR on a CPU-only engine sharing its threads with a second worker, not the
+    ~10s a born-digital page takes. The old value of 100 assumed the latter and lost every
+    full part of a long scan to the ceiling (research.md R12).
+
+    Parts that still run out of time are halved and retried rather than abandoned, so this
+    is a starting value, not a limit: measure seconds per page on your own corpus.
+    """
+
+    part_retry_splits: int = 2
+    """How often a part that ran out of time may be halved and tried again (FR-038).
+
+    Bounded because each attempt costs the engine another timeout's worth of work: at 2
+    a 40-page part reaches 10 pages before the gap is accepted as real.
+    """
+
+    part_min_pages: int = 10
+    """A part this small is not halved again — below it the document, not the size, is
+    the problem."""
+
+    part_max_attempts: int = 3
+    """Attempts per part when the engine loses the task or the result (FR-038).
+
+    A whole-document job is already resubmitted when this happens. Without the same for
+    parts, one engine restart leaves a permanent gap in a document that would convert
+    perfectly well on a second pass.
     """
 
     max_total_pages: int = 10_000
@@ -84,6 +109,29 @@ class Settings(BaseSettings):
 
     engine_connect_timeout: float = 10.0
     engine_read_timeout: float = 120.0
+
+    # --- recognition (FR-039) ---------------------------------------------
+    ocr_preset: str = "auto"
+    """Which OCR engine the engine should use; `auto` leaves the choice to it.
+
+    `auto` on this image picks RapidOCR, whose bundled weights recognise English and
+    Chinese: a German scan comes back without its umlauts and with words the retrieval
+    index will never match. `easyocr` is the one alternative that needs nothing the image
+    does not already contain — its `craft` detector and `latin_g2` recogniser are baked in
+    by the upstream build, and `latin_g2` is a Latin-script model covering German.
+    """
+
+    ocr_lang: str = ""
+    """Comma-separated recognition languages, empty to leave the engine's own default.
+
+    A language whose weights are not in the image cannot be fetched at runtime (FR-022),
+    so this is not a free choice: with `easyocr`, anything Latin-script resolves to the
+    `latin_g2` model that is present, and anything else does not.
+    """
+
+    @property
+    def ocr_languages(self) -> list[str]:
+        return [item.strip() for item in self.ocr_lang.split(",") if item.strip()]
 
     @property
     def max_in_flight(self) -> int:

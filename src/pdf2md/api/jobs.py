@@ -20,7 +20,9 @@ from pdf2md.models import (
     JobListResponse,
     JobStatus,
     JobSummary,
+    MissingPart,
     OutputFile,
+    PartStatus,
     RetryResponse,
     display_status,
 )
@@ -77,6 +79,7 @@ async def get_job(request: Request, job_id: str) -> JobDetail:
         outputs,
         document_outputs=document_outputs,
         retained_upload=storage.has_inbox_file(view.job.content_hash),
+        missing_parts=_missing_parts(db, view),
     )
 
 
@@ -243,6 +246,7 @@ def to_detail(
     *,
     document_outputs: list[OutputFile] | None = None,
     retained_upload: bool = False,
+    missing_parts: list[MissingPart] | None = None,
 ) -> JobDetail:
     job = view.job
     return JobDetail(
@@ -253,7 +257,29 @@ def to_detail(
         outputs=outputs or [],
         document_outputs=document_outputs or [],
         retained_upload=retained_upload,
+        missing_parts=missing_parts or [],
     )
+
+
+def _missing_parts(db: Database, view: JobView) -> list[MissingPart]:
+    """Why each gap in a finished document is a gap (FR-038).
+
+    Only the ranges that are absent: the ones that converted are in the file, and a
+    fifty-part document would otherwise answer a question nobody asked with fifty rows.
+    """
+    if view.job.part_count < 2 or not view.job.missing_page_ranges:
+        return []
+    return [
+        MissingPart(
+            first_page=part.first_page,
+            last_page=part.last_page,
+            status=part.status,
+            attempts=part.attempt,
+            failure_reason=part.failure_reason,
+        )
+        for part in db.parts_for_job(view.job.id)
+        if part.status is not PartStatus.SUCCEEDED
+    ]
 
 
 def _processing_seconds(view: JobView) -> float | None:

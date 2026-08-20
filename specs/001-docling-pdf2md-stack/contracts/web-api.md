@@ -129,6 +129,10 @@ The list the page polls (FR-010). Returns most recent first.
       "section_title": "Installation", "bytes": 44120 },
     { "filename": "manual--4f2a91b0c7d3--002-configuration.md",
       "section_title": "Configuration", "bytes": 71880 }
+  ],
+  "missing_parts": [
+    { "first_page": 901, "last_page": 910, "status": "timed_out", "attempts": 1,
+      "failure_reason": "These pages were still converting after the time limit…" }
   ]
 }
 ```
@@ -137,6 +141,12 @@ The list the page polls (FR-010). Returns most recent first.
 document and one per section for a document over the section threshold (FR-033), so the
 detail view can show what an operator will actually find in the outbox rather than a
 single name that no longer describes it.
+
+`missing_parts` is the detail behind `missing_page_ranges`: one entry per range that is
+absent from the finished document, with the reason the engine gave and how many attempts
+were made before it was accepted as a gap (FR-038). Empty for every other job. Without it
+a gap is the same sentence whether the engine ran out of time, lost the task, or found the
+pages unreadable — and only some of those have an answer the operator can act on.
 
 **404** when the job has been pruned from history (`JOB_HISTORY_DAYS`). The Markdown itself remains in the outbox — history pruning never removes output.
 

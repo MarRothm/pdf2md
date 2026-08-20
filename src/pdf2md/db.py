@@ -171,6 +171,17 @@ SCHEMA: list[tuple[str, str]] = [
         PRAGMA foreign_keys=ON;
         """,
     ),
+    (
+        # A part is no longer given up on at the first failure (FR-038), so it needs to
+        # carry how many times it has been tried and how far its page range has already
+        # been halved. Existing rows default to a first attempt that was never halved,
+        # which is what they are.
+        "004_part_retries",
+        """
+        ALTER TABLE conversion_part ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE conversion_part ADD COLUMN split_depth INTEGER NOT NULL DEFAULT 0;
+        """,
+    ),
 ]
 
 
@@ -679,9 +690,16 @@ class Database:
         return self.parts_for_job(job_id)
 
     def parts_for_job(self, job_id: str) -> list[ConversionPart]:
+        """Every part of a job, in reading order.
+
+        Ordered by first page rather than by ordinal: halving a part that ran out of time
+        appends its two halves with fresh ordinals, so ordinal is a unique name for a part
+        and its scratch file, not a position in the document (FR-038).
+        """
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM conversion_part WHERE job_id = ? ORDER BY ordinal", (job_id,)
+                "SELECT * FROM conversion_part WHERE job_id = ? ORDER BY first_page, ordinal",
+                (job_id,),
             ).fetchall()
         return [ConversionPart(**dict(row)) for row in rows]
 
@@ -728,15 +746,7 @@ class Database:
                 " ended_at = ? WHERE id = ?",
                 (status.value, markdown, failure_reason, stamp, part_id),
             )
-            conn.execute(
-                "UPDATE conversion_job SET parts_completed ="
-                " (SELECT COUNT(*) FROM conversion_part"
-                "  WHERE job_id = conversion_job.id AND status IN"
-                "  ('succeeded','failed','timed_out')),"
-                " updated_at = ?"
-                " WHERE id = (SELECT job_id FROM conversion_part WHERE id = ?)",
-                (stamp, part_id),
-            )
+            self._recount_parts(conn, part_id=part_id)
 
     def requeue_unfinished_parts(self, job_id: str) -> int:
         """Return unfinished parts to the queue after a restart, keeping finished ones.
@@ -752,14 +762,87 @@ class Database:
                 (job_id,),
             )
             reset = cursor.rowcount
-            conn.execute(
-                "UPDATE conversion_job SET parts_completed ="
-                " (SELECT COUNT(*) FROM conversion_part"
-                "  WHERE job_id = ? AND status IN ('succeeded','failed','timed_out'))"
-                " WHERE id = ?",
-                (job_id, job_id),
-            )
+            self._recount_parts(conn, job_id=job_id)
         return reset
+
+    def requeue_part(self, part_id: str) -> None:
+        """Put one part back in the queue for another attempt (FR-038)."""
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE conversion_part SET status = 'queued', engine_task_id = NULL,"
+                " started_at = NULL, failure_reason = NULL, attempt = attempt + 1"
+                " WHERE id = ?",
+                (part_id,),
+            )
+            self._recount_parts(conn, part_id=part_id)
+
+    def split_part(self, part_id: str, ranges: list[tuple[int, int]]) -> list[ConversionPart]:
+        """Replace one part with smaller ones covering the same pages (FR-038).
+
+        The replacements take new ordinals at the end — `parts_for_job` reads in page
+        order, so where they sit in the table does not matter — and a deeper split depth,
+        which is what stops a range that will never convert from being halved forever.
+        """
+        stamp = now_iso()
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT job_id, split_depth FROM conversion_part WHERE id = ?", (part_id,)
+            ).fetchone()
+            if row is None:
+                return []
+            job_id = row["job_id"]
+            next_ordinal = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(ordinal), 0) + 1 AS n FROM conversion_part"
+                    " WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()["n"]
+            )
+            conn.execute("DELETE FROM conversion_part WHERE id = ?", (part_id,))
+            for offset, (first_page, last_page) in enumerate(ranges):
+                conn.execute(
+                    "INSERT INTO conversion_part"
+                    " (id, job_id, ordinal, first_page, last_page, status, created_at,"
+                    "  split_depth)"
+                    " VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        job_id,
+                        next_ordinal + offset,
+                        first_page,
+                        last_page,
+                        stamp,
+                        int(row["split_depth"]) + 1,
+                    ),
+                )
+            self._recount_parts(conn, job_id=job_id)
+        return self.parts_for_job(job_id)
+
+    @staticmethod
+    def _recount_parts(
+        conn: sqlite3.Connection, *, job_id: str | None = None, part_id: str | None = None
+    ) -> None:
+        """Re-derive the job's part counters from the parts themselves.
+
+        Both counters are caches of a COUNT — the page shows *part 7 of 20* from them —
+        and both move when a part is requeued or halved, not only when one finishes.
+        """
+        if job_id is None:
+            row = conn.execute(
+                "SELECT job_id FROM conversion_part WHERE id = ?", (part_id,)
+            ).fetchone()
+            if row is None:
+                return
+            job_id = str(row["job_id"])
+        conn.execute(
+            "UPDATE conversion_job SET"
+            "   part_count = (SELECT COUNT(*) FROM conversion_part WHERE job_id = ?),"
+            "   parts_completed = (SELECT COUNT(*) FROM conversion_part WHERE job_id = ?"
+            "                      AND status IN ('succeeded','failed','timed_out')),"
+            "   updated_at = ?"
+            " WHERE id = ?",
+            (job_id, job_id, now_iso(), job_id),
+        )
 
     def count_parts_in_flight(self, job_id: str) -> int:
         with self.connection() as conn:

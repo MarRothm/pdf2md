@@ -115,6 +115,7 @@ async def test_a_part_that_overruns_is_timed_out_on_its_own_clock(
     upload, client, dispatcher, stub_engine, settings, db
 ):
     settings.part_max_pages = 10
+    settings.part_min_pages = 10  # at the floor, so the range is reported rather than halved
     settings.job_timeout_seconds = 60
     stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
     stub_engine.set_behavior("stuck.pdf (pages 1-10)", TaskBehavior(never_finishes=True))

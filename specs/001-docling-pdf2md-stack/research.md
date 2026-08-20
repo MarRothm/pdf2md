@@ -82,6 +82,19 @@ Reimplementing a queue, worker pool, and timeout supervisor around the raw libra
 
 **OCR engine**: Take the image default. Upstream's `docling-tools models download` output shows RapidOCR weights (torch and onnxruntime, English and Chinese) fetched as part of the default set, so scanned-page recognition works offline with no extra assets. EasyOCR language packs are the exception — they are downloaded only on explicit request (`docling-tools models download easyocr --easyocr-lang ...`) and so are unavailable unless baked in. This matches the spec's English-only assumption.
 
+**OCR engine — corrected 2026-08-20.** Taking the image default is wrong for a German corpus, and the paragraph above reasoned from the wrong list. Verified against the pinned tag's own build files rather than from the download output:
+
+- `Containerfile` builds with `MODELS_LIST="layout tableformer picture_classifier rapidocr easyocr"`, so **both** RapidOCR and EasyOCR weights are baked in — EasyOCR's `craft` detector and its `english_g2` *and* `latin_g2` recognisers (`EasyOcrModel.download_models` defaults).
+- `os-packages.txt` installs `tesseract` with `tesseract-langpack-eng` only. Tesseract cannot read German in this image, and a langpack cannot be added without a derived image, which R4 exists to avoid.
+- `OcrAutoModel` on linux tries nemotron, then **RapidOCR with onnxruntime**, then EasyOCR. Nemotron is not installed, so `auto` means RapidOCR, whose bundled PP-OCR weights recognise English and Chinese. German text loses its umlauts — and a retrieval index never matches a word that was never recognised.
+- `EasyOcrOptions.lang` defaults to `["fr", "de", "es", "en"]`, all of which resolve to `latin_g2`, which is present. `EasyOcrModel` sets `download_enabled=False` whenever an artifacts path is configured, so this cannot become a runtime fetch: it either uses the baked-in weights or fails loudly.
+
+**Decision**: name the engine explicitly. `PDF2MD_OCR_PRESET=easyocr` with `PDF2MD_OCR_LANG=de,en` (FR-039), which the stack file sets by default. The cost is throughput — EasyOCR on torch is slower per page than RapidOCR on onnxruntime — and that lands directly on the part-size budget in R12, which is why `PART_MAX_PAGES` is 40 and a part that runs out of time is halved rather than lost (FR-038).
+
+**Superseded**: the paragraph below concluded that the image's default matched "the spec's English-only assumption". Both halves of that were wrong — the default is not language-neutral, and the assumption was never true of the corpus this stack was built for.
+
+
+
 **VERIFY AT IMPLEMENTATION**: confirm the pinned tag actually contains a populated artifacts directory —
 `docker run --rm --entrypoint sh <image> -c 'ls /opt/app-root/src/.cache/docling/models'`. Upstream has teased `docling-serve-slim` images that *skip* model weights; those must never be used here. This check used to run at export time in `ops/save-images.sh`; with that script retired it moves to `ops/verify-engine-image.sh`, run on the Mac mini against the pulled image (R5).
 

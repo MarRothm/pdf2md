@@ -7,6 +7,7 @@ the image. These assertions are cheap and they fail in CI rather than on the Mac
 See contracts/stack.md "Deployment invariants" and research.md R5.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -86,3 +87,34 @@ def test_the_env_example_carries_no_second_copy_of_a_digest() -> None:
         "an image digest in .env.example is a copy that nothing keeps current, and it "
         "overrides the pin the repository maintains"
     )
+
+
+def test_every_documented_setting_can_actually_be_set() -> None:
+    """A variable named in the operator's guide but absent from the stack file is a lie.
+
+    Portainer passes stack variables to the container only where the compose file spells
+    them out, so `PDF2MD_PART_MAX_PAGES` documented as tunable and missing from
+    `environment:` reads as a knob and behaves as a constant — which is how a part size
+    too large for the engine's time ceiling stayed too large.
+    """
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    wired = set(re.findall(r"PDF2MD_[A-Z_]+", yaml.safe_dump(compose["services"]["web"])))
+    documented = set(re.findall(r"PDF2MD_[A-Z_]+", (COMPOSE_PATH.parent / "README.md").read_text()))
+    missing = sorted(documented - wired)
+    assert not missing, f"documented but not passed to the service: {', '.join(missing)}"
+
+
+def test_a_recognition_language_is_paired_with_an_explicit_engine() -> None:
+    """`ocr_lang` under the `auto` preset is a request nobody honours.
+
+    `auto` selects RapidOCR on this image, whose bundled weights are English and Chinese;
+    a language it has no model for cannot be fetched at runtime (FR-022). Only an engine
+    named explicitly — `easyocr`, whose `latin_g2` weights are baked in — can satisfy one.
+    """
+    web = yaml.safe_load(COMPOSE_PATH.read_text())["services"]["web"]["environment"]
+    language = str(web.get("PDF2MD_OCR_LANG", ""))
+    preset = str(web.get("PDF2MD_OCR_PRESET", ""))
+    if ":-" in language and language.split(":-", 1)[1].rstrip("}"):
+        assert ":-" in preset and preset.split(":-", 1)[1].rstrip("}") not in ("", "auto"), (
+            "PDF2MD_OCR_LANG is set while the OCR engine is left to `auto`"
+        )

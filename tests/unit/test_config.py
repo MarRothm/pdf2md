@@ -72,3 +72,13 @@ def test_the_version_has_exactly_one_source():
     assert "version" not in config["project"], "a second literal would drift again"
     assert config["project"]["dynamic"] == ["version"]
     assert config["tool"]["hatch"]["version"]["path"] == "src/pdf2md/__init__.py"
+
+
+def test_recognition_languages_are_read_as_a_list() -> None:
+    """Portainer stack variables are plain strings, so the setting is one too."""
+    settings = Settings(engine_api_key="k", ocr_lang=" de , en ")
+    assert settings.ocr_languages == ["de", "en"]
+
+
+def test_no_recognition_language_is_no_list_at_all() -> None:
+    assert Settings(engine_api_key="k").ocr_languages == []

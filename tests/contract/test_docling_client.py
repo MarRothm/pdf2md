@@ -99,3 +99,31 @@ async def test_engine_errors_become_plain_language_failure_reasons():
     assert "Traceback" not in reason
     assert "RuntimeError" not in reason
     assert reason[0].isupper() and reason.endswith(".")
+
+
+async def test_the_recognition_language_is_sent_when_it_is_configured(stub_engine):
+    """German scans come back without their umlauts under the engine's own default, whose
+    bundled weights are English and Chinese (research.md R4, FR-039)."""
+    client = DoclingClient(
+        base_url="http://engine.test",
+        api_key="test-key",
+        transport=httpx.ASGITransport(app=stub_engine.app),
+        ocr_preset="easyocr",
+        ocr_languages=["de", "en"],
+    )
+    async with client:
+        await client.submit("scan.pdf", pdf_bytes(b"scan"))
+
+    (submission,) = stub_engine.submissions
+    assert submission["ocr_preset"] == "easyocr"
+    assert submission["ocr_lang"] == ["de", "en"]
+
+
+async def test_an_unconfigured_deployment_submits_what_it_always_did(engine, stub_engine):
+    """Neither field is sent unless it is set, so the engine's own defaults still apply."""
+    async with engine:
+        await engine.submit("plain.pdf", pdf_bytes(b"plain"))
+
+    (submission,) = stub_engine.submissions
+    assert submission["ocr_preset"] == "auto"
+    assert submission["ocr_lang"] == []

@@ -77,15 +77,26 @@ rows, it shows their count (FR-037). A document converted whole has exactly one.
 |---|---|---|
 | `id` | TEXT PK | UUIDv4 |
 | `job_id` | TEXT FK → `conversion_job.id` | |
-| `ordinal` | INTEGER | 1-based; parts are converted and joined in this order |
+| `ordinal` | INTEGER | Unique within the job, and the name of its scratch file. **Not** the reading position: a part halved after failing appends its replacements with fresh ordinals, so parts are read and joined by `first_page` (FR-038) |
 | `first_page` | INTEGER | 1-based, inclusive |
 | `last_page` | INTEGER | inclusive |
 | `part_path` | TEXT NULL | Page-range PDF in the inbox volume; NULL once reaped |
 | `status` | TEXT | Same vocabulary as a job, minus `already_converted` |
 | `engine_task_id` | TEXT NULL | |
 | `markdown` | TEXT NULL | The part's converted Markdown, held until every part is done and they are joined |
-| `failure_reason` | TEXT NULL | Kept per part so FR-035 can name the page range that is missing |
+| `failure_reason` | TEXT NULL | Kept per part so FR-035 can name the page range that is missing, and FR-038 can say why |
+| `attempt` | INTEGER | 1-based; a part whose task or result the engine lost is converted again rather than abandoned (FR-038) |
+| `split_depth` | INTEGER | How often this range has already been halved after failing. Bounds the retry: each attempt costs another full engine timeout (FR-038) |
 | `started_at` / `ended_at` | TEXT NULL | |
+
+A part is never simply given up on at its first failure. A range the engine reports as
+failed, or that outruns the per-part watchdog, is replaced by two rows covering the same
+pages at `split_depth + 1` — the original row is deleted, so the pages are covered exactly
+once — until `PART_RETRY_SPLITS` or `PART_MIN_PAGES` stops it. A range whose task or result
+the engine lost goes back to `queued` with `attempt + 1` instead, because the pages are
+still in the inbox and nothing about them is known to be wrong (FR-038). `part_count` and
+`parts_completed` on the job are caches of a COUNT over these rows and are re-derived
+whenever one is added, requeued, or finished.
 
 `markdown` lives in the database rather than in a scratch file because of the single-use
 result hazard (R3): the engine serves each result exactly once, so a part's output must be

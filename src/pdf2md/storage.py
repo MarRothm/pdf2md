@@ -66,6 +66,10 @@ class Storage:
         """A page-range PDF cut from an over-long upload (FR-034)."""
         return self.inbox_path / f"{content_hash}--part{ordinal:03d}.pdf"
 
+    def delete_part_file(self, content_hash: str, ordinal: int) -> None:
+        """Discard one page-range PDF — the range it held is being cut smaller."""
+        self.part_file(content_hash, ordinal).unlink(missing_ok=True)
+
     def delete_part_files(self, content_hash: str) -> None:
         for path in self.inbox_path.glob(f"{content_hash}--part*.pdf"):
             path.unlink(missing_ok=True)

@@ -165,6 +165,9 @@ class ConversionPart(BaseModel):
     created_at: str
     started_at: str | None = None
     ended_at: str | None = None
+    attempt: int = 1
+    split_depth: int = 0
+    """How often this range has already been halved after running out of time (FR-038)."""
 
 
 class MarkdownOutput(BaseModel):
@@ -232,6 +235,21 @@ class JobSummary(BaseModel):
     """Set only for `succeeded_incomplete`: the ranges whose part failed (FR-035)."""
 
 
+class MissingPart(BaseModel):
+    """One page range that is absent from a finished document, and why (FR-038).
+
+    Without this the page can say only *pages 1-100 are missing*, which is the same
+    sentence whether the engine ran out of time, forgot the task, or found the pages
+    unreadable — three problems with three different answers.
+    """
+
+    first_page: int
+    last_page: int
+    status: PartStatus
+    attempts: int
+    failure_reason: str | None = None
+
+
 class OutputFile(BaseModel):
     filename: str
     bytes: int
@@ -253,6 +271,9 @@ class JobDetail(JobSummary):
     """
     retained_upload: bool = False
     """Whether the uploaded PDF is still on the server and would be discarded with it."""
+
+    missing_parts: list[MissingPart] = []
+    """The ranges behind `missing_page_ranges`, each with the reason it is missing."""
 
 
 class JobListResponse(BaseModel):

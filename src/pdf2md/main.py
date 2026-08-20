@@ -92,6 +92,8 @@ def create_app(
             connect_timeout=resolved.engine_connect_timeout,
             read_timeout=resolved.engine_read_timeout,
             health_path=resolved.engine_health_path,
+            ocr_preset=resolved.ocr_preset,
+            ocr_languages=resolved.ocr_languages,
         )
         dispatcher = Dispatcher(db=db, storage=storage, engine=engine, settings=resolved)
 
