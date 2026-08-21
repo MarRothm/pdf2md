@@ -413,7 +413,7 @@ accident.
 | Scanned German comes back without umlauts, or as nonsense | Recognition is running in the wrong language | `PDF2MD_OCR_PRESET` must name `easyocr`; `auto` reads English and Chinese only |
 | The page is unreachable and `web` restarts every few seconds | A document large enough that assembling it exceeds the container's memory | `web` logs show `job_reconciled` or `job_succeeded` followed by a restart with no traceback. Raise `WEB_MEM_LIMIT` (default 1g). After `PDF2MD_JOB_MAX_ATTEMPTS` (8) recoveries the document is failed rather than retried, so the loop ends on its own |
 | Many parts fail saying their result was lost | The engine is being killed and restarted under live work — almost always memory | Containers → `docling` → Inspect: `OOMKilled` and `RestartCount`. Set `DOCLING_WORKERS=1` and raise `DOCLING_MEM_LIMIT`. From 1.7.1 the status strip names this directly |
-| Host becomes sluggish under a batch | Engine memory or thread count too high | Lower `DOCLING_WORKERS`, keep `SHARE_MODELS` true, tighten `DOCLING_MEM_LIMIT` |
+| Host becomes sluggish under a batch | Thread count too high for the CPUs | Lower `DOCLING_WORKERS` or `OMP_NUM_THREADS`. **Do not tighten `DOCLING_MEM_LIMIT`** — a cap near the working set does not protect the host, it kills the container mid-document and loses every part in flight |
 | A job sits at Converting forever | The watchdog is above the engine's own timeout | `PDF2MD_JOB_TIMEOUT_SECONDS` must stay above `DOCLING_MAX_DOCUMENT_TIMEOUT`, and both must be finite |
 | A long document converts but reports missing pages, and there is no repo on the host | The reason is recorded per part and, before 1.7.0, displayed nowhere | Portainer → Containers → `web` → **Console** → Connect, then paste the one-liner in the header of `ops/why-are-pages-missing.sh`. From 1.7.0 the row's **Details** shows it directly, including for documents that already failed |
 | A long document converts but reports missing pages | Anything from the engine's time ceiling to a failure cutting the pages out of the PDF | **`ops/why-are-pages-missing.sh`** — it prints the recorded reason for every gap, and whether either container was killed for memory. Do that before changing any setting: the ranges alone do not say what happened |
@@ -465,7 +465,7 @@ inherits numbers rather than assumptions.
 
 | What | How | Result |
 |---|---|---|
-| Engine memory under a 50-document batch, and the `DOCLING_MEM_LIMIT` it implies | `docker stats` during quickstart V9 | _not yet measured — current limit 5g is a starting value_ |
+| Engine memory under a 50-document batch, and the `DOCLING_MEM_LIMIT` it implies | `docker stats` during quickstart V9 | _not yet measured. The limit is 16g — set clear of any plausible working set, not tuned to one. At 5g the engine was killed on image-heavy pages while 37 GB of the 42.1 GB VM sat unused (research.md R6)_ |
 | 20-page text PDF conversion time (SC-003: under 3 minutes) | Convert one and time it | _not yet measured_ |
 | Clean-host deploy time from this document alone (SC-004: under 30 minutes) | Time a deploy on a fresh host | _not yet measured_ |
 | Fidelity against the corpus (SC-001, SC-002, FR-004) | `python3 ops/measure-fidelity.py --base-url http://<ip>:8080` | _not yet measured — corpus not assembled_ |

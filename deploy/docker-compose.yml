@@ -91,7 +91,7 @@ services:
     # 512m was sized for a service that only shuffles files around. Joining a
     # two-thousand-page document out of its parts is the one moment it holds real data,
     # and at 512m the container was killed doing it — then restarted, and killed again.
-    mem_limit: ${WEB_MEM_LIMIT:-1g}
+    mem_limit: ${WEB_MEM_LIMIT:-4g}
     logging:
       driver: json-file
       options:
@@ -119,7 +119,8 @@ services:
       DOCLING_SERVE_API_KEY: ${PDF2MD_ENGINE_API_KEY:?set a long random string in the stack variables}
       DOCLING_SERVE_ENG_KIND: local
       DOCLING_SERVE_ENG_LOC_NUM_WORKERS: ${DOCLING_WORKERS:-2}
-      # Worker threads share one model set — the main memory lever on the 8.38 GB VM.
+      # Worker threads share one model set. Cheap, and it keeps the working set flat as
+      # workers are added — but it is no longer load-bearing: the VM has 42.1 GB.
       DOCLING_SERVE_ENG_LOC_SHARE_MODELS: "true"
       # Per-document ceiling (FR-028), below the web service's own watchdog so the
       # engine gives up first and the queue keeps moving.
@@ -152,7 +153,11 @@ services:
     networks:
       # `core` only, and no `ports:` — the engine is not reachable from the LAN at all.
       - core
-    mem_limit: ${DOCLING_MEM_LIMIT:-5g}
+    # Set clear of any plausible working set, not tuned to one. At 5g this container was
+    # killed converting image-heavy pages while 37 GB of the VM sat unused — and a
+    # container's own limit kills it however much the host has spare. Every kill took the
+    # engine's task table with it, failing every part in flight (research.md R6).
+    mem_limit: ${DOCLING_MEM_LIMIT:-16g}
     logging:
       driver: json-file
       options:

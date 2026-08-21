@@ -138,14 +138,18 @@ Reimplementing a queue, worker pool, and timeout supervisor around the raw libra
 
 **Decision**: Target `linux/arm64`, CPU-only, and size the engine for the container VM's memory rather than the Mac's.
 
-**Measured on the target host**: Apple M4, 16 GB physical; the container VM reports 10 CPUs and **8.38 GB** of RAM. The runtime is **OrbStack** 29.4.0, not Docker Desktop, and `portainer/portainer-ee` is already present locally — consistent with this being the Mac mini described in the spec.
+**Measured on the target host — corrected 2026-08-21**: the Mac mini has **64 GB** physical and its OrbStack VM reports **42.1 GB**. The runtime is **OrbStack**, not Docker Desktop, and `portainer/portainer-ee` shares the VM.
+
+The original figure below — 16 GB physical, an 8.38 GB VM — was measured on a different machine, and it drove every memory decision in this stack for three days. The engine ran with `mem_limit: 5g` and was repeatedly killed converting an image-heavy document while 37 GB of the VM sat unused, because **a container's own `mem_limit` kills it regardless of what the host has spare**. Each kill took the engine's task table with it, and every part in flight failed reporting a lost result. That is the whole of the missing-pages history in this repository.
+
+> *Superseded*: Apple M4, 16 GB physical; the container VM reports 10 CPUs and 8.38 GB of RAM.
 
 **Implications**:
 - No GPU or MPS is reachable from Linux containers on macOS. `DOCLING_DEVICE=cpu` is set explicitly rather than left on `auto`.
-- 8.38 GB across the whole VM is the real budget, and Portainer plus any other stacks share it. Engine memory is capped (`mem_limit`) and `DOCLING_SERVE_ENG_LOC_SHARE_MODELS=true` is set so worker threads share one model set instead of each holding a copy. This is what protects SC-011 (host stays responsive).
+- 42.1 GB across the whole VM is the real budget, and Portainer plus any other stacks share it. Memory is no longer the binding constraint — **CPU is** — so the caps exist to protect the host from a runaway, not to ration a scarce resource. `DOCLING_SERVE_ENG_LOC_SHARE_MODELS=true` stays: it costs nothing and keeps worker threads on one model set. A cap set close to the expected working set does not protect anything; it converts a heavy document into a killed container (SC-011).
 - `OMP_NUM_THREADS` is left at the image default of 4, leaving headroom on the 10 available CPUs for the web service and Portainer.
 
-**VERIFY AT IMPLEMENTATION**: measured RSS of the engine at 2 workers with `SHARE_MODELS=true`, to confirm the chosen `mem_limit` is neither throttling conversions nor starving the host.
+**STILL UNMEASURED**: the engine's actual RSS at 2 workers with `SHARE_MODELS=true`. The limits below are now set well clear of any plausible working set rather than tuned to a measured one — which is the right way round, given what tuning them tightly cost.
 
 ---
 
