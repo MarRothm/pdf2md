@@ -13,7 +13,7 @@ import contextlib
 import logging
 from pathlib import Path
 
-from pdf2md.clock import iso_ago, now, parse_iso
+from pdf2md.clock import iso_ago, now, now_iso, parse_iso
 from pdf2md.config import Settings
 from pdf2md.db import Database
 from pdf2md.docling_client import (
@@ -123,6 +123,14 @@ class Dispatcher:
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         self._last_maintenance = now()
+        self.last_pass_at: str | None = None
+        """When a pass last completed. A loop that has stopped is invisible otherwise."""
+
+        self.last_engine_error: str | None = None
+        self.last_engine_error_at: str | None = None
+        """Why the engine last refused work. A refusal leaves the job queued and is
+        retried forever, which is right — but reported as nothing at all it is a document
+        that waits indefinitely under a status strip saying the converter is ready."""
 
     # --- lifecycle --------------------------------------------------------
 
@@ -154,6 +162,21 @@ class Dispatcher:
         self.expire_timeouts()
         await self.poll_active()
         await self.submit_queued()
+        self.last_pass_at = now_iso()
+
+    @property
+    def is_alive(self) -> bool:
+        """Whether the loop is still running. `_loop` survives an ordinary exception, but
+        nothing supervises the task itself, and a dead one looks exactly like an idle."""
+        return self._task is not None and not self._task.done()
+
+    def note_engine_refusal(self, detail: str) -> None:
+        self.last_engine_error = detail
+        self.last_engine_error_at = now_iso()
+
+    def note_engine_accepted(self) -> None:
+        self.last_engine_error = None
+        self.last_engine_error_at = None
 
     async def drain(self, max_passes: int = 500) -> None:
         """Run passes until nothing is in flight — the test harness's clock."""
@@ -227,6 +250,8 @@ class Dispatcher:
                 continue
 
             if self._needs_parts(job):
+                if not self.reconcile_split_job(job):
+                    continue
                 await self.submit_parts(job, inbox_file)
                 continue
 
@@ -236,6 +261,7 @@ class Dispatcher:
                 )
             except EngineUnavailableError as error:
                 # The job stays queued; health reports degraded until the engine returns.
+                self.note_engine_refusal(str(error))
                 logger.warning(
                     'engine_submit_failed job_id=%s file="%s" detail="%s"',
                     job.id,
@@ -244,6 +270,7 @@ class Dispatcher:
                 )
                 return
 
+            self.note_engine_accepted()
             self.db.mark_submitted(job.id, submitted.task_id, submitted.task_position)
             log_job(
                 logger,
@@ -310,8 +337,10 @@ class Dispatcher:
                     PartStatus.FAILED,
                     failure_reason=f"pages could not be extracted: {error}",
                 )
+                self._log_part_gap(job, part, f"extraction failed: {error}")
                 continue
             except EngineUnavailableError as error:
+                self.note_engine_refusal(str(error))
                 logger.warning(
                     'engine_submit_failed job_id=%s part=%s detail="%s"',
                     job.id,
@@ -320,6 +349,7 @@ class Dispatcher:
                 )
                 return
 
+            self.note_engine_accepted()
             self.db.mark_part_submitted(part.id, submitted.task_id)
             log_job(
                 logger,
@@ -336,6 +366,54 @@ class Dispatcher:
             if job.status is JobStatus.QUEUED:
                 self.db.mark_submitted(job.id, submitted.task_id, submitted.task_position)
                 job = self.db.get_job(job.id) or job
+
+    def reconcile_split_job(self, job: ConversionJob) -> bool:
+        """Repair the two states a split job can be left in with nobody watching it.
+
+        `poll_active` only looks at jobs the engine is working on, and a job is only that
+        once one of its parts has been submitted. A split job sitting in `queued` with
+        parts already in flight is therefore polled by nobody, while `submit_parts` sees
+        no capacity and submits nothing — a document that waits for ever, logging nothing,
+        under a status line that says the converter is ready. The same is true of a job
+        whose parts all failed before it ever left `queued`: every part is terminal and
+        the join that would finish the document is only ever called from the polling path.
+
+        Returns True when the job still has work to do.
+        """
+        if job.part_count < 2 or job.status is not JobStatus.QUEUED:
+            return True
+        parts = self.db.parts_for_job(job.id)
+        if not parts:
+            return True
+
+        in_flight = [
+            part for part in parts if part.status in (PartStatus.SUBMITTED, PartStatus.RUNNING)
+        ]
+        if in_flight:
+            self.db.mark_submitted(job.id, in_flight[0].engine_task_id or "", None)
+            log_job(
+                logger,
+                "job_reconciled",
+                job_id=job.id,
+                filename=job.submitted_filename,
+                level=logging.WARNING,
+                reason="queued while its parts were already with the engine",
+                parts_in_flight=len(in_flight),
+            )
+            return False
+
+        if all(part.status in TERMINAL_PART_STATUSES for part in parts):
+            log_job(
+                logger,
+                "job_reconciled",
+                job_id=job.id,
+                filename=job.submitted_filename,
+                level=logging.WARNING,
+                reason="queued after every part had already finished",
+            )
+            self.finish_split_job(job)
+            return False
+        return True
 
     async def poll_parts(self, job: ConversionJob) -> None:
         """Advance each in-flight part, then finish the job once none are left."""

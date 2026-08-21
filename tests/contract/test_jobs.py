@@ -126,3 +126,24 @@ async def test_since_returns_only_jobs_changed_after_the_marker(upload, client, 
     await upload(("second.pdf", pdf_bytes(b"b")))
     changed = (await client.get(f"/api/jobs?since={marker}")).json()["jobs"]
     assert [job["filename"] for job in changed] == ["second.pdf"]
+
+
+async def test_a_failed_document_can_be_converted_again(convert, client, stub_engine):
+    """The page offers this now; it has always been what the endpoint was for."""
+    stub_engine.default_behavior = TaskBehavior(task_status_on_finish="failure")
+    response = await convert(("broken.pdf", pdf_bytes(b"broken")))
+    job_id = response.json()["accepted"][0]["job_id"]
+    assert (await client.get(f"/api/jobs/{job_id}")).json()["status"] == "failed"
+
+    retry = await client.post(f"/api/jobs/{job_id}/retry")
+    assert retry.status_code == 202
+    assert retry.json()["status"] == "queued"
+
+
+async def test_a_finished_document_is_still_refused(convert, client):
+    response = await convert(("fine.pdf", pdf_bytes(b"fine")))
+    job_id = response.json()["accepted"][0]["job_id"]
+
+    retry = await client.post(f"/api/jobs/{job_id}/retry")
+    assert retry.status_code == 409
+    assert retry.json()["error"]["code"] == "already_converted"

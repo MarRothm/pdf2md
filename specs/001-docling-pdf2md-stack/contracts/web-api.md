@@ -153,6 +153,17 @@ were made before it was accepted as a gap (FR-038). Empty for every other job. W
 a gap is the same sentence whether the engine ran out of time, lost the task, or found the
 pages unreadable — and only some of those have an answer the operator can act on.
 
+`GET /api/health` carries a `dispatcher` block alongside `engine`:
+
+```json
+{ "running": true, "last_pass_at": "…Z", "last_engine_error": null, "last_engine_error_at": null }
+```
+
+`engine.reachable` answers whether `/ready` responds; this answers whether work is moving.
+They differ: an engine that answers `/ready` can refuse every submission, and the loop can
+stop while everything it depends on stays healthy. Either makes the status `degraded`, so a
+queue that never empties is never reported as a converter standing ready (FR-041).
+
 **404** when the job has been pruned from history (`JOB_HISTORY_DAYS`). The Markdown itself remains in the outbox — history pruning never removes output.
 
 ---

@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -37,6 +37,7 @@ from pdf2md.storage import OutOfSpaceError, Storage
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+_page = (STATIC_DIR / "index.html").read_text()
 
 
 class PublicEngineAddressError(RuntimeError):
@@ -140,8 +141,19 @@ def create_app(
         return JSONResponse({"status": "ok"})
 
     @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+    async def index() -> HTMLResponse:
+        """The page, with its assets addressed by version.
+
+        `StaticFiles` sends no `Cache-Control`, so a browser is free to reuse `app.js`
+        from cache without revalidating — and did: after a release the page kept running
+        the previous version's script, so a feature that had shipped appeared to be
+        missing. The query string changes with every release, and this document is served
+        `no-cache` so the new one is actually seen.
+        """
+        return HTMLResponse(
+            _page.replace("__VERSION__", _version()),
+            headers={"Cache-Control": "no-cache"},
+        )
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

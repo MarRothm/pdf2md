@@ -74,6 +74,11 @@ def display_status(
     state = JobStatus(status)
     if state in CONVERTING_STATUSES and part_count > 1:
         return f"Converting — part {min(parts_completed + 1, part_count)} of {part_count}"
+    if state is JobStatus.QUEUED and part_count > 1 and parts_completed:
+        # A document resumed after a restart is queued with most of its work already done,
+        # and a bare "Queued" reads as *back to the beginning* on a job that took hours.
+        # The parts that converted kept their Markdown; say so (FR-037).
+        return f"Queued — {parts_completed} of {part_count} parts already converted"
     if state is JobStatus.SUCCEEDED_INCOMPLETE and missing_page_ranges:
         ranges = ", ".join(
             f"{first}" if first == last else f"{first}-{last}"
@@ -330,6 +335,21 @@ class DatabaseHealth(BaseModel):
     writable: bool
 
 
+class DispatcherHealth(BaseModel):
+    """Whether work is actually moving, and why not when it is not.
+
+    Engine reachability is not the same question: an engine that answers `/ready` can
+    still refuse every submission, and the conversion loop can stop while everything it
+    depends on stays healthy. Both present as a queue that never empties under a status
+    line saying the converter is ready.
+    """
+
+    running: bool = True
+    last_pass_at: str | None = None
+    last_engine_error: str | None = None
+    last_engine_error_at: str | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     engine: EngineHealth
@@ -337,6 +357,7 @@ class HealthResponse(BaseModel):
     outbox: OutboxHealth
     database: DatabaseHealth
     version: str
+    dispatcher: DispatcherHealth = DispatcherHealth()
 
 
 class ErrorBody(BaseModel):

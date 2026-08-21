@@ -148,3 +148,50 @@ async def test_a_split_document_whose_upload_vanished_names_the_missing_pages(
     assert detail["status"] in {"succeeded_incomplete", "failed"}
     if detail["status"] == "succeeded_incomplete":
         assert detail["missing_page_ranges"]
+
+
+async def test_a_queued_job_whose_parts_are_with_the_engine_is_not_abandoned(
+    upload, client, dispatcher, db, stub_engine, settings
+):
+    """Nobody polls a `queued` job, and a job with parts in flight submits nothing more.
+
+    Left alone the two states deadlock: the document waits for ever, logs nothing, and the
+    status strip reports a converter standing ready (FR-041).
+    """
+    settings.part_max_pages = 10
+    stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
+
+    body = (await upload(("stuck.pdf", pdf_bytes(b"stuck", pages=25)))).json()
+    job_id = body["accepted"][0]["job_id"]
+    await dispatcher.run_once()  # submits the first parts and marks the job submitted
+
+    # The state a crash between the two writes leaves behind: parts with the engine,
+    # job back in the queue.
+    with db.connection() as conn:
+        conn.execute("UPDATE conversion_job SET status = 'queued' WHERE id = ?", (job_id,))
+
+    await dispatcher.drain()
+
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    assert detail["status"] == "succeeded"
+
+
+async def test_a_queued_job_whose_parts_all_failed_is_finished(
+    upload, client, dispatcher, db, stub_engine, settings
+):
+    """The join is only ever called from the polling path, which a queued job never reaches."""
+    settings.part_max_pages = 10
+    settings.part_min_pages = 10
+    stub_engine.default_behavior = TaskBehavior(task_status_on_finish="failure")
+
+    body = (await upload(("doomed.pdf", pdf_bytes(b"doomed", pages=25)))).json()
+    job_id = body["accepted"][0]["job_id"]
+    await dispatcher.drain()
+
+    with db.connection() as conn:
+        conn.execute("UPDATE conversion_job SET status = 'queued' WHERE id = ?", (job_id,))
+
+    await dispatcher.run_once()
+
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    assert detail["status"] in {"failed", "succeeded_incomplete"}

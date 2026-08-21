@@ -64,3 +64,19 @@ def test_no_web_font_is_requested():
     css = _asset_text("styles.css")
     assert "@font-face" not in css
     assert "@import" not in css
+
+
+def test_the_page_addresses_its_assets_by_version():
+    """`StaticFiles` sends no `Cache-Control`, so a browser may reuse `app.js` without
+    revalidating. After a release that shows the previous version's page — a shipped
+    feature looking like a missing one."""
+    page = _asset_text("index.html")
+    for asset in ("app.js", "styles.css"):
+        assert f"/static/{asset}?v=__VERSION__" in page, f"{asset} is loaded unversioned"
+
+
+async def test_the_page_itself_is_never_cached(client):
+    response = await client.get("/")
+    assert "no-cache" in response.headers.get("cache-control", "")
+    assert "?v=" in response.text
+    assert "__VERSION__" not in response.text

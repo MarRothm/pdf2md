@@ -12,6 +12,7 @@ import re
 import pytest
 
 from pdf2md.main import STATIC_DIR
+from pdf2md.models import JobStatus, display_status
 
 pytestmark = pytest.mark.unit
 
@@ -185,3 +186,16 @@ def test_clearing_the_list_states_that_successful_conversions_go_too():
 def test_the_entry_count_comes_from_a_filtered_query_not_the_loaded_rows():
     """X5: the list is capped by `limit`; an older sibling would go uncounted."""
     assert "content_hash=${encodeURIComponent" in _code("app.js")
+
+
+def test_a_resumed_split_document_says_how_much_survived() -> None:
+    """A restart requeues the unfinished parts and keeps the rest. Reported as a bare
+    "Queued", a job that took hours reads as though it went back to the beginning."""
+    assert (
+        display_status(JobStatus.QUEUED, part_count=58, parts_completed=57)
+        == "Queued — 57 of 58 parts already converted"
+    )
+
+
+def test_a_split_document_that_has_done_nothing_yet_is_just_queued() -> None:
+    assert display_status(JobStatus.QUEUED, part_count=58, parts_completed=0) == "Queued"

@@ -270,6 +270,12 @@ function renderDetail(job) {
       "sections before importing.";
   } else if (job.status === "queued" && job.queue_position !== null) {
     text.textContent = `Waiting — position ${job.queue_position} in the queue`;
+  } else if (job.status === "queued" && job.part_count > 1 && job.parts_completed) {
+    // Resumed after a restart: the finished parts kept their Markdown and are not
+    // converted again, so this is not a job starting over.
+    text.textContent =
+      `Waiting for a converter — ${job.parts_completed} of ${job.part_count} parts are ` +
+      "already converted and will not be done again";
   } else if (job.status === "queued" || job.status === "submitted") {
     text.textContent = "Waiting for a converter";
   } else if (job.status === "running") {
@@ -321,14 +327,17 @@ function renderActions(job) {
   details.addEventListener("click", () => showDetail(job.job_id));
   stack.append(details);
 
-  if (job.status === "succeeded_incomplete") {
-    // The one status where a finished document is still worth converting again: the file
-    // exists, and pages are missing from it (FR-040). Without this the only way to ask for
-    // a whole document is to delete this one, which throws away what did convert.
+  if (RECONVERTIBLE.has(job.status)) {
+    // `POST /retry` has existed since the first release with nothing on the page calling
+    // it, so the only way to convert a document again was to upload it a second time —
+    // and for `succeeded_incomplete` even that was refused as already converted (FR-040).
     const again = document.createElement("button");
     again.type = "button";
     again.textContent = "Convert again";
-    again.title = "Convert the whole document again and replace this file";
+    again.title =
+      job.status === "succeeded_incomplete"
+        ? "Convert the whole document again and replace this file"
+        : "Convert this document again";
     again.addEventListener("click", () => convertAgain(job, again));
     stack.append(again);
   }
@@ -336,6 +345,11 @@ function renderActions(job) {
   stack.append(renderDeleteButton(job));
   return cell;
 }
+
+// Every terminal state where converting again is a sensible thing to ask for. A
+// successful conversion is not one of them: the server refuses it, and offering a control
+// that always fails is worse than offering none.
+const RECONVERTIBLE = new Set(["succeeded_incomplete", "failed", "timed_out"]);
 
 async function convertAgain(job, button) {
   button.disabled = true;
@@ -787,6 +801,14 @@ async function refreshHealth() {
     parts.push(payload.engine && payload.engine.reachable ? "Converter ready" : "Converter offline");
     if (backlog.queued || backlog.converting) {
       parts.push(`${backlog.converting} converting, ${backlog.queued} waiting`);
+    }
+    // A queue that is not moving says so here. "Converter ready · 1 waiting" is otherwise
+    // indistinguishable from a stall that lasts all afternoon.
+    const loop = payload.dispatcher || {};
+    if (loop.last_engine_error) {
+      parts.push(`nothing is being submitted — the converter refused: ${loop.last_engine_error}`);
+    } else if (loop.running === false) {
+      parts.push("the conversion loop has stopped — restart the web service");
     }
     if (payload.outbox) parts.push(`${payload.outbox.documents} in the output folder`);
     el.health.textContent = parts.join(" · ");
