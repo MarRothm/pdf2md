@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     """A part this small is not halved again — below it the document, not the size, is
     the problem."""
 
+    job_max_attempts: int = 8
+    """Recoveries of one document before it is given up on (FR-042).
+
+    A restart requeues whatever was in flight, which is right until the document is what
+    caused the restart: then it is recovered, kills the service again, and is recovered
+    again — a crash loop that takes every other document down with it and cannot be
+    escaped from the page, because the page is down too.
+    """
+
     part_max_attempts: int = 3
     """Attempts per part when the engine loses the task or the result (FR-038).
 

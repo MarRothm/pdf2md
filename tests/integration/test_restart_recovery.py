@@ -195,3 +195,32 @@ async def test_a_queued_job_whose_parts_all_failed_is_finished(
 
     detail = (await client.get(f"/api/jobs/{job_id}")).json()
     assert detail["status"] in {"failed", "succeeded_incomplete"}
+
+
+async def test_a_document_that_keeps_stopping_the_service_is_given_up_on(
+    upload, client, app, db, settings
+):
+    """A crash loop takes every other document with it, and cannot be escaped from the
+    page, because the page is down too (FR-042)."""
+    settings.job_max_attempts = 3
+    body = (await upload(("heavy.pdf", pdf_bytes(b"heavy", pages=2)))).json()
+    job_id = body["accepted"][0]["job_id"]
+
+    dispatcher = app.state.dispatcher
+    for _ in range(settings.job_max_attempts + 1):
+        dispatcher.recover_in_flight()  # what a restart does
+
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    assert detail["status"] == "failed"
+    assert "smaller pieces" in detail["failure_reason"]
+
+
+async def test_an_ordinary_restart_still_resumes(upload, client, app, settings):
+    settings.job_max_attempts = 8
+    body = (await upload(("fine.pdf", pdf_bytes(b"fine", pages=2)))).json()
+    job_id = body["accepted"][0]["job_id"]
+
+    app.state.dispatcher.recover_in_flight()
+
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    assert detail["status"] == "queued"

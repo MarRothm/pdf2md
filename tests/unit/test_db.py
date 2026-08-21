@@ -6,7 +6,7 @@ import pytest
 
 from pdf2md.clock import iso_ago
 from pdf2md.db import SCHEMA, Database
-from pdf2md.models import JobStatus
+from pdf2md.models import JobStatus, PartStatus
 
 pytestmark = pytest.mark.unit
 
@@ -274,3 +274,28 @@ def test_job_views_can_be_filtered_by_content_hash(db):
     views = db.job_views(limit=100, content_hash=HASH)
 
     assert [view.job.id for view in views] == [mine.id]
+
+
+def test_part_states_leave_the_markdown_in_the_database(tmp_path):
+    """Reading every part's Markdown on every dispatcher pass is the whole document in
+    memory, a few seconds apart, inside a 512 MB container."""
+    db = Database(tmp_path / "db.sqlite")
+    db.migrate()
+    db.upsert_source_document(
+        content_hash="h",
+        original_filename="big.pdf",
+        size_bytes=1,
+        page_count=200,
+        inbox_path=str(tmp_path / "h.pdf"),
+    )
+    job = db.create_job(content_hash="h", submitted_filename="big.pdf")
+    parts = db.create_parts(job.id, [(1, 100), (101, 200)])
+    db.finish_part(parts[0].id, PartStatus.SUCCEEDED, markdown="# converted text")
+
+    assert [part.markdown for part in db.part_states_for_job(job.id)] == [None, None]
+    assert db.parts_for_job(job.id)[0].markdown == "# converted text"
+    # states are still states
+    assert [part.status for part in db.part_states_for_job(job.id)] == [
+        PartStatus.SUCCEEDED,
+        PartStatus.QUEUED,
+    ]

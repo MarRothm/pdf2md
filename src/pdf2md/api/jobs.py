@@ -277,7 +277,7 @@ def _missing_parts(db: Database, view: JobView) -> list[MissingPart]:
             attempts=part.attempt,
             failure_reason=part.failure_reason,
         )
-        for part in db.parts_for_job(view.job.id)
+        for part in db.part_states_for_job(view.job.id)
         if part.status is not PartStatus.SUCCEEDED
     ]
 

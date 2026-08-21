@@ -49,6 +49,7 @@ services:
       PDF2MD_PART_RETRY_SPLITS: ${PDF2MD_PART_RETRY_SPLITS:-2}
       PDF2MD_PART_MIN_PAGES: ${PDF2MD_PART_MIN_PAGES:-10}
       PDF2MD_PART_MAX_ATTEMPTS: ${PDF2MD_PART_MAX_ATTEMPTS:-3}
+      PDF2MD_JOB_MAX_ATTEMPTS: ${PDF2MD_JOB_MAX_ATTEMPTS:-8}
       PDF2MD_PARTS_IN_FLIGHT: ${PDF2MD_PARTS_IN_FLIGHT:-2}
       PDF2MD_MAX_TOTAL_PAGES: ${PDF2MD_MAX_TOTAL_PAGES:-10000}
       PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES: ${PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES:-1048576}
@@ -87,7 +88,10 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    mem_limit: ${WEB_MEM_LIMIT:-512m}
+    # 512m was sized for a service that only shuffles files around. Joining a
+    # two-thousand-page document out of its parts is the one moment it holds real data,
+    # and at 512m the container was killed doing it — then restarted, and killed again.
+    mem_limit: ${WEB_MEM_LIMIT:-1g}
     logging:
       driver: json-file
       options:

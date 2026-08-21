@@ -39,6 +39,11 @@ from pdf2md.storage import Storage, reap_inbox
 
 logger = logging.getLogger(__name__)
 
+REPEATED_CRASH_REASON = (
+    "This document was interrupted and resumed {attempts} times without finishing, so the "
+    "service has stopped trying to convert it. It may be too large for the memory this "
+    "service is given. Convert it in smaller pieces, or give the service more memory."
+)
 RESTART_LOST_FILE_REASON = (
     "This document was interrupted by a restart and the uploaded file is no longer "
     "available. Please upload it again."
@@ -217,8 +222,30 @@ class Dispatcher:
         instead of being silently dropped.
         """
         for job in self.db.in_flight_jobs():
+            # Counted for every recovery, queued or not. A document that keeps stopping the
+            # service is recovered from `queued` each time, so an attempt counter that only
+            # moves for started work never notices the loop it is part of (FR-042).
+            attempts = job.attempt + 1
+            if attempts > self.settings.job_max_attempts:
+                self.db.finish_job(
+                    job.id,
+                    JobStatus.FAILED,
+                    failure_reason=REPEATED_CRASH_REASON.format(attempts=job.attempt),
+                )
+                log_job(
+                    logger,
+                    "job_failed",
+                    job_id=job.id,
+                    filename=job.submitted_filename,
+                    level=logging.ERROR,
+                    outcome="failed",
+                    attempt=job.attempt,
+                    reason="recovered too many times without finishing; refusing to retry",
+                )
+                continue
+
             if self.storage.has_inbox_file(job.content_hash):
-                attempt = job.attempt + 1 if job.status is not JobStatus.QUEUED else job.attempt
+                attempt = attempts
                 if job.part_count > 1:
                     # Only the unfinished parts go back. A part that already converted
                     # keeps its Markdown rather than being paid for twice.
@@ -320,7 +347,7 @@ class Dispatcher:
         page ceiling bounds the worst case, but this is what stops a long document from
         sitting in front of everyone else's short ones for hours (research.md R14).
         """
-        parts = self.db.parts_for_job(job.id)
+        parts = self.db.part_states_for_job(job.id)
         if not parts:
             document = self.db.get_source_document(job.content_hash)
             pages = document.page_count if document else None
@@ -403,7 +430,7 @@ class Dispatcher:
         """
         if job.part_count < 2 or job.status is not JobStatus.QUEUED:
             return True
-        parts = self.db.parts_for_job(job.id)
+        parts = self.db.part_states_for_job(job.id)
         if not parts:
             return True
 
@@ -438,7 +465,7 @@ class Dispatcher:
 
     async def poll_parts(self, job: ConversionJob) -> None:
         """Advance each in-flight part, then finish the job once none are left."""
-        for part in self.db.parts_for_job(job.id):
+        for part in self.db.part_states_for_job(job.id):
             if part.status not in (PartStatus.SUBMITTED, PartStatus.RUNNING):
                 continue
             assert part.engine_task_id
@@ -472,7 +499,7 @@ class Dispatcher:
 
         # The upload is gone, so no further page range can be cut from it. Fail what is
         # left rather than hanging: the document still finishes, incomplete and saying so.
-        for part in self.db.parts_for_job(job.id):
+        for part in self.db.part_states_for_job(job.id):
             if part.status is PartStatus.QUEUED:
                 self.db.finish_part(
                     part.id, PartStatus.FAILED, failure_reason=RESTART_LOST_FILE_REASON
@@ -614,7 +641,7 @@ class Dispatcher:
         )
 
     def _all_parts_terminal(self, job_id: str) -> bool:
-        parts = self.db.parts_for_job(job_id)
+        parts = self.db.part_states_for_job(job_id)
         return bool(parts) and all(part.status in TERMINAL_PART_STATUSES for part in parts)
 
     def finish_split_job(self, job: ConversionJob) -> None:
@@ -624,6 +651,8 @@ class Dispatcher:
         than a clean failure, and the gap is named in the file as well as on the page,
         because job history is pruned while the file is forever.
         """
+        # The one caller that needs the Markdown itself, and the only place the whole
+        # document is held in memory at once.
         parts = self.db.parts_for_job(job.id)
         succeeded = [part for part in parts if part.status is PartStatus.SUCCEEDED]
         missing = [
@@ -970,7 +999,7 @@ class Dispatcher:
         time (research.md R12). A document's effective ceiling is therefore its part count
         times this limit, and each part is judged on its own clock.
         """
-        for part in self.db.parts_for_job(job.id):
+        for part in self.db.part_states_for_job(job.id):
             if part.status not in (PartStatus.SUBMITTED, PartStatus.RUNNING):
                 continue
             started = part.started_at or part.created_at

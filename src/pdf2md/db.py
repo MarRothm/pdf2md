@@ -687,21 +687,44 @@ class Database:
                 "UPDATE conversion_job SET part_count = ?, updated_at = ? WHERE id = ?",
                 (len(ranges), stamp, job_id),
             )
-        return self.parts_for_job(job_id)
+        return self.part_states_for_job(job_id)
+
+    # Reading order is by first page, not by ordinal: halving a part that ran out of time
+    # appends its two halves with fresh ordinals, so ordinal is a unique name for a part
+    # and its scratch file, not a position in the document (FR-038).
+    _PARTS_IN_READING_ORDER = " FROM conversion_part WHERE job_id = ? ORDER BY first_page, ordinal"
 
     def parts_for_job(self, job_id: str) -> list[ConversionPart]:
-        """Every part of a job, in reading order.
+        """Every part of a job, in reading order, **including its converted Markdown**.
 
-        Ordered by first page rather than by ordinal: halving a part that ran out of time
-        appends its two halves with fresh ordinals, so ordinal is a unique name for a part
-        and its scratch file, not a position in the document (FR-038).
+        Only the join needs this. Every other caller wants `part_states_for_job`: a part's
+        Markdown is a slice of the finished document, and reading all of them costs the
+        whole document in memory.
         """
         with self.connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM conversion_part WHERE job_id = ? ORDER BY first_page, ordinal",
-                (job_id,),
-            ).fetchall()
+            rows = conn.execute("SELECT *" + self._PARTS_IN_READING_ORDER, (job_id,)).fetchall()
         return [ConversionPart(**dict(row)) for row in rows]
+
+    def part_states_for_job(self, job_id: str) -> list[ConversionPart]:
+        """The same parts without their Markdown, for the callers that only need status.
+
+        The dispatcher asks what its parts are doing on every pass, a few seconds apart.
+        Answering with `SELECT *` meant reading the entire converted document out of the
+        database two or three times a pass and holding it — inside a 512 MB container, on
+        a document of two thousand pages, that is the service being killed and restarted.
+
+        `markdown` is None on these rows. That is why they are a separate call and not a
+        flag: a part with no Markdown looks exactly like a part that failed, and handing
+        one of these to the join would write a gap where a converted page belongs.
+        """
+        columns = (
+            "id, job_id, ordinal, first_page, last_page, part_path, status, engine_task_id,"
+            " NULL AS markdown, failure_reason, created_at, started_at, ended_at, attempt,"
+            " split_depth"
+        )
+        with self.connection() as conn:
+            rows = conn.execute(f"SELECT {columns}{self._PARTS_IN_READING_ORDER}", (job_id,))
+            return [ConversionPart(**dict(row)) for row in rows.fetchall()]
 
     def set_part_path(self, part_id: str, part_path: str) -> None:
         with self.connection() as conn:
@@ -816,7 +839,7 @@ class Database:
                     ),
                 )
             self._recount_parts(conn, job_id=job_id)
-        return self.parts_for_job(job_id)
+        return self.part_states_for_job(job_id)
 
     @staticmethod
     def _recount_parts(
