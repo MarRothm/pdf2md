@@ -348,6 +348,10 @@ class DispatcherHealth(BaseModel):
     last_pass_at: str | None = None
     last_engine_error: str | None = None
     last_engine_error_at: str | None = None
+    engine_restarts_recent: int = 0
+    """Tasks the engine has forgotten lately. Each one is a restart under live work, and
+    the parts that were with it fail saying their result was lost — which reads as a
+    document problem and is not one."""
 
 
 class HealthResponse(BaseModel):

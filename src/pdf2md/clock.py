@@ -28,5 +28,5 @@ def parse_iso(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def iso_ago(*, hours: float = 0, days: float = 0) -> str:
-    return to_iso(now() - timedelta(hours=hours, days=days))
+def iso_ago(*, minutes: float = 0, hours: float = 0, days: float = 0) -> str:
+    return to_iso(now() - timedelta(minutes=minutes, hours=hours, days=days))

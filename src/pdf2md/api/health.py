@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pdf2md import __version__
 from pdf2md.api import db_of, engine_of, settings_of, storage_of
 from pdf2md.clock import now_iso
+from pdf2md.dispatcher import ENGINE_RESTART_ALARM
 from pdf2md.models import (
     DatabaseHealth,
     DispatcherHealth,
@@ -39,8 +40,14 @@ async def health(request: Request) -> JSONResponse:
         last_pass_at=dispatcher.last_pass_at if dispatcher is not None else None,
         last_engine_error=dispatcher.last_engine_error if dispatcher is not None else None,
         last_engine_error_at=dispatcher.last_engine_error_at if dispatcher is not None else None,
+        engine_restarts_recent=dispatcher.engine_restarts_recent if dispatcher is not None else 0,
     )
-    stalled = bool(loop.last_engine_error) or (settings.dispatcher_enabled and not loop.running)
+    restarting = loop.engine_restarts_recent >= ENGINE_RESTART_ALARM
+    stalled = (
+        bool(loop.last_engine_error)
+        or restarting
+        or (settings.dispatcher_enabled and not loop.running)
+    )
 
     payload = HealthResponse(
         status="ok"

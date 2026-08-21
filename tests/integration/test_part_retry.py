@@ -169,3 +169,19 @@ async def test_spent_attempts_fall_through_to_a_smaller_range(
     assert detail["status"] == "succeeded"
     assert detail["missing_page_ranges"] is None
     assert detail["part_count"] == 3
+
+
+async def test_an_engine_restart_under_a_part_is_recorded_as_such(
+    upload, dispatcher, stub_engine, settings
+):
+    """The 35 gaps that cost two days were an engine being killed and brought back, which
+    nothing on this side reported (FR-041)."""
+    settings.part_max_pages = 10
+    stub_engine.default_behavior = TaskBehavior(markdown="body " * 200)
+
+    await upload(("restarting.pdf", pdf_bytes(b"restart", pages=25)))
+    await dispatcher.run_once()
+    stub_engine.reset_tasks()  # an engine restart loses every task it was given
+    await dispatcher.run_once()
+
+    assert dispatcher.engine_restarts_recent >= 1

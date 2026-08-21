@@ -64,6 +64,9 @@ PART_LOST_REASON = (
 )
 
 MAINTENANCE_INTERVAL_SECONDS = 600
+ENGINE_RESTART_WINDOW_MINUTES = 15
+ENGINE_RESTART_ALARM = 3
+"""Lost tasks within the window before the engine is called what it is: restarting."""
 
 
 def claim_already_converted(db: Database, storage: Storage, job: ConversionJob) -> str | None:
@@ -128,6 +131,13 @@ class Dispatcher:
 
         self.last_engine_error: str | None = None
         self.last_engine_error_at: str | None = None
+        self.engine_restarts: list[str] = []
+        """When the engine was last seen to have forgotten its tasks.
+
+        A task the engine has no record of means it restarted under the work. One is
+        unremarkable; a handful in a few minutes is an engine being killed and brought
+        back — almost always for memory — and that is invisible from this side otherwise:
+        every part simply fails, saying its result was lost."""
         """Why the engine last refused work. A refusal leaves the job queued and is
         retried forever, which is right — but reported as nothing at all it is a document
         that waits indefinitely under a status strip saying the converter is ready."""
@@ -177,6 +187,17 @@ class Dispatcher:
     def note_engine_accepted(self) -> None:
         self.last_engine_error = None
         self.last_engine_error_at = None
+
+    def note_engine_forgot_task(self) -> None:
+        """Record that the engine has no record of a task it was given (FR-041)."""
+        cutoff = iso_ago(minutes=ENGINE_RESTART_WINDOW_MINUTES)
+        self.engine_restarts = [at for at in self.engine_restarts if at >= cutoff]
+        self.engine_restarts.append(now_iso())
+
+    @property
+    def engine_restarts_recent(self) -> int:
+        cutoff = iso_ago(minutes=ENGINE_RESTART_WINDOW_MINUTES)
+        return len([at for at in self.engine_restarts if at >= cutoff])
 
     async def drain(self, max_passes: int = 500) -> None:
         """Run passes until nothing is in flight — the test harness's clock."""
@@ -424,6 +445,7 @@ class Dispatcher:
             try:
                 poll = await self.engine.poll(part.engine_task_id)
             except TaskNotFoundError:
+                self.note_engine_forgot_task()
                 self._retry_part(job, part, PART_LOST_REASON, reason_log="engine forgot the task")
                 continue
             except EngineUnavailableError:

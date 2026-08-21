@@ -805,7 +805,14 @@ async function refreshHealth() {
     // A queue that is not moving says so here. "Converter ready · 1 waiting" is otherwise
     // indistinguishable from a stall that lasts all afternoon.
     const loop = payload.dispatcher || {};
-    if (loop.last_engine_error) {
+    if (loop.engine_restarts_recent >= 3) {
+      // The converter being killed and brought back reads, from every document's point of
+      // view, as its own pages being at fault. Name it once, here.
+      parts.push(
+        `the converter has restarted ${loop.engine_restarts_recent} times recently — ` +
+        "it is probably running out of memory; lower DOCLING_WORKERS"
+      );
+    } else if (loop.last_engine_error) {
       parts.push(`nothing is being submitted — the converter refused: ${loop.last_engine_error}`);
     } else if (loop.running === false) {
       parts.push("the conversion loop has stopped — restart the web service");

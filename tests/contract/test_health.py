@@ -91,3 +91,24 @@ async def test_a_submission_that_succeeds_clears_the_refusal(client, dispatcher,
     body = (await client.get("/api/health")).json()
     assert body["dispatcher"]["last_engine_error"] is None
     assert body["status"] == "ok"
+
+
+async def test_an_engine_that_keeps_forgetting_its_tasks_is_named(client, dispatcher):
+    """A restarting engine reads, from every document's side, as its own pages failing:
+    each part says only that its result was lost. Say what is actually happening."""
+    for _ in range(3):
+        dispatcher.note_engine_forgot_task()
+
+    response = await client.get("/api/health")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["engine"]["reachable"] is True
+    assert body["dispatcher"]["engine_restarts_recent"] == 3
+
+
+async def test_one_forgotten_task_is_not_an_alarm(client, dispatcher):
+    dispatcher.note_engine_forgot_task()
+    body = (await client.get("/api/health")).json()
+    assert body["status"] == "ok"
+    assert body["dispatcher"]["engine_restarts_recent"] == 1
