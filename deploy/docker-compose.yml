@@ -67,7 +67,14 @@ services:
       - core
     depends_on:
       docling:
-        condition: service_healthy
+        # `service_started`, not `service_healthy`. Waiting for the engine to be healthy
+        # was meant to keep the first conversion off a cold engine — but it also means an
+        # engine that never becomes healthy takes the page down with it, and the page is
+        # the only thing that could have said the engine was sick. That happened: the
+        # engine was being killed and restarted, and the operator saw "cannot reach the
+        # server" instead of a diagnosis. The service handles an absent engine already —
+        # health reports degraded and uploads are still accepted and queued (FR-018).
+        condition: service_started
     healthcheck:
       test:
         - CMD

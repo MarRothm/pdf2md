@@ -118,3 +118,17 @@ def test_a_recognition_language_is_paired_with_an_explicit_engine() -> None:
         assert ":-" in preset and preset.split(":-", 1)[1].rstrip("}") not in ("", "auto"), (
             "PDF2MD_OCR_LANG is set while the OCR engine is left to `auto`"
         )
+
+
+def test_the_page_does_not_wait_for_the_engine_to_be_healthy() -> None:
+    """An engine that never becomes healthy must not take the page down with it.
+
+    The page is what reports the engine's state; gating it on that state means the one
+    failure you most need to see is the one that hides the interface (FR-041). Uploads
+    while the engine is away are already handled — they queue.
+    """
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    condition = compose["services"]["web"]["depends_on"]["docling"]["condition"]
+    assert condition == "service_started", (
+        "web waits for the engine to be healthy; a sick engine then hides the page"
+    )
