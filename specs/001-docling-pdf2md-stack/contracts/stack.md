@@ -89,9 +89,17 @@ volumes:
 | `PDF2MD_FAILED_INBOX_RETENTION_DAYS` | `14` | Failed and timed-out jobs keep their source PDF this long so a retry is possible |
 | `PDF2MD_SUSPECT_MIN_CHARS_PER_PAGE` | `50` | Below this yield a conversion reports as suspect rather than plain success (FR-029) |
 | `PDF2MD_JOB_HISTORY_DAYS` | `30` | History pruning; never touches the outbox |
-| `PDF2MD_PART_MAX_PAGES` | `100` | Documents longer than this are split; sized to the engine's *time* ceiling, not its page ceiling. At 10 s/page a part takes ~1000 s against the engine's 2400 s limit. A 2000-page document is then 20 parts, ~2.8 h at two in flight — the 15 h watchdog ceiling is a backstop, not an expectation (research.md R12) |
+| `PDF2MD_PART_MAX_PAGES` | `40` | Documents longer than this are split. A part has to fit inside every ceiling at once — the engine's 2400 s per submission, the memory each container is given, and the engine's page limit — and which one binds is a property of the corpus, not of this setting. Measured on the real corpus: ~0.6 s/page for born-digital text, 2–6.5 s/page for pages of images and spreadsheet layouts. The former default of `100` was derived from an assumed 10 s/page that was never measured (research.md R6, R12) |
 | `PDF2MD_MAX_TOTAL_PAGES` | `10000` | Refused at upload above this (FR-036). With `PARTS_IN_FLIGHT` already bounding queue slots, this ceiling mostly bounds **wall-clock time**: 10 000 pages is 100 parts, roughly 14 hours at two in flight. Set it to the longest single document worth occupying the converter for |
 | `PDF2MD_PARTS_IN_FLIGHT` | `2` | Parts of one document in the engine at once, so a long document does not starve short ones |
+| `PDF2MD_ENGINE_WORKERS` | `${DOCLING_WORKERS}` | Mirrors the engine's worker count so the dispatcher submits no more documents than the engine can work on, plus a buffer of one (FR-027). Set from the same stack variable, so the two cannot drift |
+| `PDF2MD_PART_RETRY_SPLITS` | `2` | How often a part that failed may be halved and tried again before the range is reported missing (FR-038). Bounded: each attempt costs the engine another run at it |
+| `PDF2MD_PART_MIN_PAGES` | `10` | A part this small is not halved again — below it the pages, not their number, are the problem (FR-038) |
+| `PDF2MD_PART_MAX_ATTEMPTS` | `3` | Attempts per part when the engine loses the task or the result. Spent attempts fall through to halving rather than to a gap, because an engine dying on a range presents as a lost task (FR-038) |
+| `PDF2MD_JOB_MAX_ATTEMPTS` | `8` | Recoveries of one document before it is given up on. A document that is itself causing the restarts is otherwise recovered, stops the service again, and is recovered again — a loop no operator can escape from the page, because the page is down too (FR-042) |
+| `PDF2MD_OCR_PRESET` | `easyocr` | Which OCR engine the converter uses for scanned pages. `auto` picks RapidOCR, whose bundled weights read English and Chinese; `easyocr` needs nothing extra, since its `craft` and `latin_g2` weights are baked into the pinned image and `latin_g2` covers German (FR-039, research.md R4) |
+| `PDF2MD_OCR_LANG` | `de,en` | Recognition languages, comma-separated, empty to take the engine's own default. Must be satisfiable from weights already in the image: nothing is downloaded at runtime (FR-022, FR-039) |
+| `PDF2MD_MIN_FREE_BYTES` | `67108864` | Uploads are refused below this much free space, naming the location that is full |
 | `PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES` | `1048576` | Above this, output is written as section files (FR-033) |
 | `PDF2MD_SECTION_MIN_BYTES` | `16384` | Sections smaller than this merge into the previous one |
 | `PDF2MD_SECTION_MAX_BYTES` | `524288` | Sections larger than this are divided at the next heading level |
@@ -109,7 +117,7 @@ volumes:
 | `DOCLING_SERVE_API_KEY` | `${PDF2MD_ENGINE_API_KEY}` | Defense against accidental port publication (research.md R9) |
 | `DOCLING_SERVE_ENG_KIND` | `local` | No Redis; the local engine is sufficient at this scale |
 | `DOCLING_SERVE_ENG_LOC_NUM_WORKERS` | `2` | Bounded concurrent work (FR-027) |
-| `DOCLING_SERVE_ENG_LOC_SHARE_MODELS` | `true` | Threads share one model set — the main memory lever on an 8.38 GB VM |
+| `DOCLING_SERVE_ENG_LOC_SHARE_MODELS` | `true` | Threads share one model set. Cheap, and it keeps the working set flat as workers are added — but no longer load-bearing: the VM has 42.1 GB (research.md R6) |
 | `DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT` | `2400` (40 min) | Per-document ceiling (FR-028); default is 7 days |
 | `DOCLING_SERVE_MAX_FILE_SIZE` | `209715200` | Matches the web upload limit |
 | `DOCLING_SERVE_MAX_NUM_PAGES` | `2000` | Bounds a pathological document |
@@ -123,10 +131,15 @@ volumes:
 
 | Service | Limit | Rationale |
 |---|---|---|
-| `docling` | `mem_limit` sized against measured RSS at 2 workers, leaving room for Portainer and other stacks on the 8.38 GB VM | SC-011 — the host stays responsive under a 50-document batch |
-| `web` | modest `mem_limit` | It streams uploads and writes files; it never holds a document in memory in full |
+| `docling` | `16g` | Set clear of any plausible working set, not tuned to one. The VM has 42.1 GB and Portainer shares it, so memory is not the scarce resource — **CPU is** (research.md R6) |
+| `web` | `4g` | It streams uploads and writes files, and holds real data in exactly one place: joining a long document out of its parts (FR-034) |
 
-The exact engine limit is set from measurement during implementation, not guessed (research.md R6).
+**A cap near the working set protects nothing.** A container's own `mem_limit` kills it however
+much the host has spare, and for the engine each kill takes its task table with it, failing every
+part in flight. That is the whole of the missing-pages history in this repository: `docling` at
+`5g` and `web` at `512m` were both killed doing ordinary work while 37 GB of the VM sat unused.
+Size these against the VM, not against a guess at the working set; if the host needs protecting
+from a batch, the lever is `DOCLING_WORKERS` and `OMP_NUM_THREADS` (SC-011).
 
 ## Healthchecks
 

@@ -55,7 +55,7 @@ One attempt to convert one `SourceDocument`. The unit the page displays and the 
 | `created_at` | TEXT | |
 | `started_at` | TEXT NULL | When the engine reported `started` |
 | `ended_at` | TEXT NULL | Terminal transition time |
-| `attempt` | INTEGER | 1 on first try; incremented on restart-driven resubmission |
+| `attempt` | INTEGER | 1 on first try; incremented on **every** recovery, whatever state the job was recovered from. Counting only started work never notices the loop it is part of: a document that is itself stopping the service is recovered from `queued` each time (FR-042) |
 | `failure_reason` | TEXT NULL | Human-readable, shown verbatim on the page (FR-011) |
 | `engine_errors` | TEXT NULL | JSON array copied from the engine's `errors[]`, for logs |
 | `output_filename` | TEXT NULL | Set on success when the document produced a single file; NULL when it produced section files |
@@ -176,8 +176,11 @@ Terminal states are marked ●: `succeeded`, `succeeded_suspect`, `succeeded_inc
 | `queued` | `queued` (split) | Page count at upload exceeds `PART_MAX_PAGES` | The PDF is divided into page-range parts in the inbox; one `ConversionPart` row per part; `part_count` set (FR-034) |
 | `submitted`/`running` | `succeeded_incomplete` | Every part reached a terminal state and at least one failed, but at least one succeeded | Output written from the parts that succeeded; `missing_page_ranges` set; the gap is marked in the Markdown itself, not only on the page (FR-035) |
 | `submitted`/`running` | `failed` | Every part failed | Nothing written; the reason names the first part's failure |
-| `queued`/`submitted`/`running` | `queued` (attempt+1) | Service restart, inbox PDF still present | Engine task IDs do not survive an engine restart, so the job is resubmitted rather than polled |
+| `queued`/`submitted`/`running` | `queued` (attempt+1) | Service restart, inbox PDF still present, `attempt` within `JOB_MAX_ATTEMPTS` | Engine task IDs do not survive an engine restart, so the job is resubmitted rather than polled |
 | `queued`/`submitted`/`running` | `failed` | Service restart, inbox PDF missing | `failure_reason` = "interrupted by a restart and the uploaded file is no longer available" |
+| `queued`/`submitted`/`running` | `failed` | Recovered more than `JOB_MAX_ATTEMPTS` times without finishing | The document is what is stopping the service — assembling it exceeds the memory the container is given, say — so resuming it is a loop that takes every other document down and cannot be escaped from the page, because the page is down too. The reason names the attempt count and points at document size and service memory (FR-042) |
+| `queued` | `submitted` | Reconciliation: the job is queued while parts of it are already with the engine | Only jobs the engine is working on are polled, and a job becomes one only once a part is submitted; without this the parts are polled by nobody while `submit_parts` sees no capacity (FR-041) |
+| `queued` | `succeeded_incomplete`/`failed` | Reconciliation: the job is queued and every part has already reached a terminal state | The join runs only from the polling path, which a queued job never reaches; the finished parts would otherwise never be written (FR-041) |
 
 The restart rules are what satisfy User Story 5 scenario 3: nothing in flight is ever left silently in a non-terminal state after a restart — it is either genuinely resumed or explicitly reported.
 

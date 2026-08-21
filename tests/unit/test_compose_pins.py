@@ -132,3 +132,20 @@ def test_the_page_does_not_wait_for_the_engine_to_be_healthy() -> None:
     assert condition == "service_started", (
         "web waits for the engine to be healthy; a sick engine then hides the page"
     )
+
+
+def test_every_shipped_setting_is_in_the_stack_contract() -> None:
+    """`contracts/stack.md` is where a setting's default and its reasoning live.
+
+    A setting that ships without a row there is a value nobody can question later — which
+    is how `PART_MAX_PAGES=100` kept its "at 10 s/page" rationale through three days of
+    evidence that the real figure was under one.
+    """
+    web = yaml.safe_dump(yaml.safe_load(COMPOSE_PATH.read_text())["services"]["web"])
+    contract = (
+        COMPOSE_PATH.parents[1] / "specs" / "001-docling-pdf2md-stack" / "contracts" / "stack.md"
+    ).read_text()
+    missing = sorted(
+        name for name in set(re.findall(r"PDF2MD_[A-Z_]+", web)) if name not in contract
+    )
+    assert not missing, f"shipped but undocumented in stack.md: {', '.join(missing)}"
