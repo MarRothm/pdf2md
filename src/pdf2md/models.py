@@ -230,7 +230,14 @@ class JobSummary(BaseModel):
     page_count: int | None
     failure_reason: str | None
     output_filename: str | None
+    """The first file the document produced. For a sectioned document that is section
+    one of many, which is why `download_all_url` exists (FR-043)."""
+
+    output_file_count: int = 1
     download_url: str | None
+    download_all_url: str | None = None
+    """Every file the document produced, as one archive. Set only when there is more
+    than one — otherwise the single-file download already is the document."""
     engine_status: str | None = None
     """`success` or `partial_success`; the page shows the latter distinctly."""
     part_count: int = 1

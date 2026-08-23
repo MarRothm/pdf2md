@@ -972,13 +972,24 @@ class JobView:
     page_count: int | None
     original_filename: str
     output_bytes: int | None
+    """Across every file the document produced, not just the first one."""
+
+    output_file_count: int
     engine_status: str | None
 
 
+# `output_bytes` and `output_file_count` are aggregates over the document, not properties
+# of `j.output_filename`. A document above the section threshold writes hundreds of files
+# and the job names only the first (FR-033); reporting that one file's size as the
+# document's output is how a 1344-file conversion looked like a single small one.
 _JOB_VIEW_SELECT = """
     SELECT j.*, d.size_bytes AS doc_size_bytes, d.page_count AS doc_page_count,
            d.original_filename AS doc_original_filename,
-           o.bytes AS output_bytes, o.engine_status AS output_engine_status
+           (SELECT SUM(m.bytes) FROM markdown_output m
+             WHERE m.content_hash = j.content_hash) AS output_bytes,
+           (SELECT COUNT(*) FROM markdown_output m
+             WHERE m.content_hash = j.content_hash) AS output_file_count,
+           o.engine_status AS output_engine_status
       FROM conversion_job j
       JOIN source_document d ON d.content_hash = j.content_hash
       LEFT JOIN markdown_output o ON o.output_filename = j.output_filename
@@ -993,6 +1004,7 @@ def _row_to_view(row: sqlite3.Row) -> JobView:
         page_count=data["doc_page_count"],
         original_filename=data["doc_original_filename"],
         output_bytes=data["output_bytes"],
+        output_file_count=int(data["output_file_count"] or 0),
         engine_status=data["output_engine_status"],
     )
 

@@ -6,6 +6,9 @@ replaces that document's own section files, because an engine upgrade can detect
 headings and would otherwise leave two contradictory versions for AnythingLLM to cite.
 """
 
+import io
+import zipfile
+
 import pytest
 
 from tests.conftest import pdf_bytes
@@ -77,3 +80,64 @@ async def test_reconverting_replaces_the_previous_section_files(
     assert not any(name.endswith("--003-gamma.md") for name in after)
     assert len([name for name in after if "manual" in name]) == 2
     assert before - after == {name for name in before if name.endswith("--003-gamma.md")}
+
+
+async def test_a_sectioned_document_downloads_as_one_archive(
+    convert, client, settings, storage, stub_engine
+):
+    """The row's download was section one of however many the document produced — for a
+    2038-page contract, one file of 1344 (FR-043)."""
+    settings.section_split_threshold_bytes = 1000
+    settings.section_min_bytes = 100
+    settings.section_max_bytes = 10**6
+    stub_engine.default_behavior = TaskBehavior(markdown=_markdown("Alpha", "Beta", "Gamma"))
+
+    response = await convert(("manual.pdf", pdf_bytes(b"sections")))
+    job_id = response.json()["accepted"][0]["job_id"]
+    detail = (await client.get(f"/api/jobs/{job_id}")).json()
+    written = sorted(path.name for path in storage.outbox_path.glob("*.md"))
+    assert len(written) > 1, "this test needs a document that sectioned"
+
+    assert detail["output_file_count"] == len(written)
+    assert detail["download_all_url"] == f"/api/jobs/{job_id}/markdown.zip"
+
+    archive = await client.get(detail["download_all_url"])
+    assert archive.status_code == 200
+    assert archive.headers["content-type"] == "application/zip"
+    assert archive.headers["content-disposition"].endswith('.zip"')
+
+    with zipfile.ZipFile(io.BytesIO(archive.content)) as bundle:
+        assert sorted(bundle.namelist()) == written
+        # the files themselves, not empty entries standing in for them
+        assert all(
+            bundle.read(name) == (storage.outbox_path / name).read_bytes() for name in written
+        )
+
+
+async def test_a_single_file_document_is_not_offered_an_archive(convert, client):
+    response = await convert(("plain.pdf", pdf_bytes(b"plain")))
+    detail = (await client.get(f"/api/jobs/{response.json()['accepted'][0]['job_id']}")).json()
+
+    assert detail["output_file_count"] == 1
+    assert detail["download_all_url"] is None
+    assert detail["download_url"] is not None
+
+
+async def test_an_archive_of_removed_files_is_not_an_empty_zip(
+    convert, client, storage, settings, stub_engine
+):
+    """An operator who has already moved the files out gets told so, not a valid archive
+    containing nothing."""
+    settings.section_split_threshold_bytes = 1000
+    settings.section_min_bytes = 100
+    settings.section_max_bytes = 10**6
+    stub_engine.default_behavior = TaskBehavior(markdown=_markdown("Alpha", "Beta"))
+
+    response = await convert(("gone.pdf", pdf_bytes(b"gone")))
+    job_id = response.json()["accepted"][0]["job_id"]
+    for path in storage.outbox_path.glob("*.md"):
+        path.unlink()
+
+    failed = await client.get(f"/api/jobs/{job_id}/markdown.zip")
+    assert failed.status_code == 404
+    assert failed.json()["error"]["code"] == "no_output"

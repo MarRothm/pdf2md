@@ -33,3 +33,12 @@ def output_filename(original_name: str, content_hash: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", content_hash):
         raise ValueError("content_hash must be a lowercase hex SHA-256 digest")
     return f"{slugify(original_name)}--{content_hash[:HASH_PREFIX_LENGTH]}.md"
+
+
+def archive_filename(original_name: str, content_hash: str) -> str:
+    """The download name for every file of one document, bundled (FR-043).
+
+    Deliberately the document's name, not the first section's: what arrives in the
+    browser should be recognisable as the thing that was uploaded.
+    """
+    return output_filename(original_name, content_hash).removesuffix(".md") + ".zip"

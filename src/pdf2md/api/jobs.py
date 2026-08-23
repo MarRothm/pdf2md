@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
+import zipfile
+from pathlib import Path
 
 from fastapi import APIRouter, Query, Request, Response
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from pdf2md.api import ApiError, db_of, storage_of
 from pdf2md.clock import now_iso, parse_iso
@@ -26,6 +32,7 @@ from pdf2md.models import (
     RetryResponse,
     display_status,
 )
+from pdf2md.naming import archive_filename
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -118,6 +125,71 @@ async def download_markdown(request: Request, job_id: str) -> Response:
         content=path.read_bytes(),
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{job.output_filename}"'},
+    )
+
+
+@router.get("/{job_id}/markdown.zip")
+async def download_all_markdown(request: Request, job_id: str) -> FileResponse:
+    """Every Markdown file this document produced, as one archive (FR-043).
+
+    A document above the section threshold writes one file per section — for a long
+    contract that was 1344 of them — and the job record names only the first. The
+    single-file download then hands over section one and calls it the document, which is
+    both useless and hard to notice. This is the honest form of the same request.
+
+    Built into a temporary file rather than memory: the count is unbounded, and this
+    service has already been killed once for holding a whole document at once (FR-042).
+    """
+    db = db_of(request)
+    storage = storage_of(request)
+    view = _require_view(db, job_id)
+    job = view.job
+
+    if job.status not in TERMINAL_STATUSES:
+        raise ApiError(
+            409,
+            "still_converting",
+            f'"{job.submitted_filename}" is still converting. '
+            "The Markdown will be available when it finishes.",
+        )
+
+    present = [
+        (output.output_filename, storage.outbox_file(output.output_filename))
+        for output in db.outputs_for_hash(job.content_hash)
+        if storage.has_outbox_file(output.output_filename)
+    ]
+    if not present:
+        raise ApiError(
+            404,
+            "no_output",
+            f'No Markdown is available for "{job.submitted_filename}" — '
+            "it either produced none, or the files have since been removed from the server.",
+        )
+
+    handle, temp_name = tempfile.mkstemp(prefix="pdf2md-", suffix=".zip")
+    os.close(handle)
+    archive = Path(temp_name)
+    try:
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for name, path in present:
+                bundle.write(path, arcname=name)
+    except OSError:
+        archive.unlink(missing_ok=True)
+        raise
+
+    log_job(
+        logger,
+        "download_archive",
+        job_id=job.id,
+        filename=job.submitted_filename,
+        output_files=len(present),
+        archive_bytes=archive.stat().st_size,
+    )
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename=archive_filename(view.original_filename, job.content_hash),
+        background=BackgroundTask(archive.unlink, missing_ok=True),
     )
 
 
@@ -232,7 +304,13 @@ def to_summary(view: JobView) -> JobSummary:
         page_count=view.page_count,
         failure_reason=job.failure_reason,
         output_filename=job.output_filename,
+        output_file_count=view.output_file_count,
         download_url=f"/api/jobs/{job.id}/markdown" if downloadable else None,
+        download_all_url=(
+            f"/api/jobs/{job.id}/markdown.zip"
+            if downloadable and view.output_file_count > 1
+            else None
+        ),
         engine_status=view.engine_status,
         part_count=job.part_count,
         parts_completed=job.parts_completed,

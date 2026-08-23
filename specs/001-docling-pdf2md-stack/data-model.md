@@ -58,7 +58,7 @@ One attempt to convert one `SourceDocument`. The unit the page displays and the 
 | `attempt` | INTEGER | 1 on first try; incremented on **every** recovery, whatever state the job was recovered from. Counting only started work never notices the loop it is part of: a document that is itself stopping the service is recovered from `queued` each time (FR-042) |
 | `failure_reason` | TEXT NULL | Human-readable, shown verbatim on the page (FR-011) |
 | `engine_errors` | TEXT NULL | JSON array copied from the engine's `errors[]`, for logs |
-| `output_filename` | TEXT NULL | Set on success when the document produced a single file; NULL when it produced section files |
+| `output_filename` | TEXT NULL | The **first** file the document produced — for a sectioned document, section one of however many (FR-033). Not NULL for section files, as previously documented here: the download built on that assumption handed over one file of 1344 and called it the document (FR-043) |
 | `part_count` | INTEGER | 1 for a document converted whole; N for a split document (FR-034) |
 | `parts_completed` | INTEGER | Drives "Converting — part 7 of 20" on the page (FR-037) |
 | `missing_page_ranges` | TEXT NULL | JSON array of page ranges whose part failed; non-NULL means the document is incomplete (FR-035) |

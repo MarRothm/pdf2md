@@ -109,6 +109,10 @@ The list the page polls (FR-010). Returns most recent first.
 
 `status` is the machine vocabulary from [data-model.md](../data-model.md); `display_status` is the user-facing string, so the page never maps states itself — `succeeded_suspect` renders as *Converted — check output* (FR-029), and a split document in progress renders as *Converting — part 7 of 25* (FR-037). `download_url` is populated for `succeeded`, `succeeded_suspect`, `succeeded_incomplete`, and `already_converted`.
 
+`output_file_count` is how many files the document produced and `output_bytes` their
+total size — both aggregates over the document, not properties of `output_filename`, which
+names only the first (FR-043).
+
 `page_count` is known from upload onwards, not only after conversion (FR-036). `part_count` is 1 for a document converted whole, so the page needs no special case: it shows the part counter only when `part_count > 1`. `missing_page_ranges` is non-null only for `succeeded_incomplete`, and carries the ranges whose parts failed — e.g. `[[901, 1000]]` (FR-035).
 
 ---
@@ -165,6 +169,23 @@ stop while everything it depends on stays healthy. Either makes the status `degr
 queue that never empties is never reported as a converter standing ready (FR-041).
 
 **404** when the job has been pruned from history (`JOB_HISTORY_DAYS`). The Markdown itself remains in the outbox — history pruning never removes output.
+
+---
+
+## `GET /api/jobs/{job_id}/markdown.zip`
+
+Every Markdown file the document produced, as one archive (FR-043).
+
+**200** `application/zip`, with
+`Content-Disposition: attachment; filename="annual-report--4f2a91b0c7d3.zip"` — the
+document's name, not the first section's. Entries are the outbox filenames.
+
+`download_all_url` on the job payload is set only when `output_file_count > 1`; for a
+single-file document the plain download already is the document. Files recorded but no
+longer in the outbox are skipped, and **404 `no_output`** is returned when none remain —
+an empty archive is not an answer.
+
+**409 `still_converting`** while the job is not terminal.
 
 ---
 

@@ -222,6 +222,11 @@ so file boundaries do not change what it finds — but they do change what it na
 answers. A 2000-page manual as one file cites "the manual"; as section files it cites the
 chapter.
 
+**A sectioned document downloads as one zip.** The row's button reads *Download 1344
+files* and hands over an archive named after the document. It exists because the button
+used to hand over section one and look exactly the same doing it. The outbox is still the
+route for AnythingLLM — the archive is for the browser.
+
 ⚠️ **Re-converting a document replaces its own section files.** This is the only place the
 stack deletes from the outbox, and it is deliberately narrow — only files this service
 wrote, only for the document being re-converted. Without it, an engine upgrade that

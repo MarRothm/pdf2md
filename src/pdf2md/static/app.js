@@ -312,11 +312,16 @@ function renderActions(job) {
   if (job.download_url) {
     const link = document.createElement("a");
     link.className = "download";
-    link.href = job.download_url;
+    // A sectioned document's own download is section one of hundreds. Offer the archive
+    // instead, and say how many files are in it (FR-043).
+    const bundled = job.download_all_url && job.output_file_count > 1;
+    link.href = bundled ? job.download_all_url : job.download_url;
     // Labelled, not named after the file: a section filename is long enough to have
     // been a width problem of its own. The name is in the title and in the detail view.
-    link.textContent = "Download";
-    link.title = job.output_filename || "";
+    link.textContent = bundled ? `Download ${job.output_file_count} files` : "Download";
+    link.title = bundled
+      ? `All ${job.output_file_count} Markdown files for this document, as a zip`
+      : job.output_filename || "";
     link.setAttribute("download", "");
     stack.append(link);
   }
