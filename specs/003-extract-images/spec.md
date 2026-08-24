@@ -146,13 +146,18 @@ other document was touched.
   how many pictures one document can produce. The floor keeps rules, bullet glyphs, and
   spacers out of the output folder; the ceiling is a safety net for a document that defeats
   the part-page rule.
-- **FR-006**: A picture that is not extracted MUST still leave no picture data in the
-  Markdown (FR-001). What the Markdown says in its place depends on why:
-  - a **page-sized image** leaves nothing — the page is represented by its recognised text,
-    and a marker on every page of a scanned document would be noise in both the file and
-    the knowledge base;
-  - a picture skipped for **being too small, or past the ceiling**, leaves a note that a
-    picture was there, because that is information the operator would otherwise lose.
+- **FR-006** *(revised 2026-08-24)*: The Markdown MUST carry a reference for an extracted
+  picture and **nothing at all** for one that is not extracted, whatever the reason. What
+  was skipped, and why, belongs on the document — in its record and in the log — not in its
+  text.
+
+  The original rule left a note where a picture had been skipped as too small or past the
+  ceiling, so the operator would not lose the information silently. That was written for the
+  occasional skipped picture. A real document skipped **three and a half thousand**, and the
+  file bound for the knowledge base filled with markers for pictures nobody could see —
+  worse than the problem the note existed to prevent. A note that appears once is
+  information; the same note three thousand times is noise, and noise in the Markdown is
+  what this feature exists to remove.
 - **FR-007**: Image file names MUST be derived deterministically from the document's identity
   and the picture's position within it, so that converting the same document again produces
   the same names and overwrites in place rather than accumulating a second set. Two different
@@ -175,6 +180,7 @@ other document was touched.
   pictures are missing in the same way it already reports missing pages — visibly, with a
   reason, and marked in the Markdown itself rather than only in a history that is pruned.
 - **FR-013**: The system MUST record how many pictures a document produced, so an operator
+- **FR-014**: A picture lying entirely within the page's header or footer band MUST NOT be extracted, and MUST leave nothing in the Markdown. It is the page's furniture — a party logo, a mark — repeated on every page, and nothing a reader of the text loses. *Added 2026-08-24, from the operator: "why not ignore images in headers and footers at all — an image there is of no need for the LLM to know."* Position is what separates furniture from content; **size never did**, because the same logo appears at many sizes and any threshold high enough to exclude it excluded real figures too. The bands MUST be configurable, and MUST be read correctly whichever way up the source's coordinates run.
   can tell an illustrated document that extracted nothing from a document that had no
   pictures to extract.
 

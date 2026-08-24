@@ -159,6 +159,19 @@ class Settings(BaseSettings):
     not yet measured: quickstart V8 is the measurement (research.md R4).
     """
 
+    image_header_band: float = 0.12
+    image_footer_band: float = 0.12
+    """Fractions of the page in which a picture is the page's furniture, not its content.
+
+    A party logo in the header repeats on every page: it is nothing the reader of the text
+    loses, and at two per page it is what fills an outbox with thousands of files. The rule
+    is the operator's — *an image up there is of no use to the knowledge base* — and it
+    holds whatever size the logo happens to be, which a size threshold never did.
+
+    Starting values, not measurements. 0.12 of A4 is about 3.5 cm; set them from a document
+    whose headers you can see (FR-014).
+    """
+
     image_min_bytes: int = 4096
     """Below this a picture is a rule, a bullet, or a spacer, not a figure (FR-005)."""
 

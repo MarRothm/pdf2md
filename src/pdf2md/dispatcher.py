@@ -880,6 +880,8 @@ class Dispatcher:
             coverage=self.settings.image_page_coverage,
             min_bytes=self.settings.image_min_bytes,
             max_per_document=self.settings.image_max_per_document,
+            header_band=self.settings.image_header_band,
+            footer_band=self.settings.image_footer_band,
             inline=[uri for _, _, uri in image_tokens(result_markdown)],
         )
         if not decisions:
@@ -1028,6 +1030,8 @@ class Dispatcher:
             coverage=self.settings.image_page_coverage,
             min_bytes=self.settings.image_min_bytes,
             max_per_document=self.settings.image_max_per_document,
+            header_band=self.settings.image_header_band,
+            footer_band=self.settings.image_footer_band,
             inline=[uri for _, _, uri in image_tokens(markdown)],
         )
         if not decisions:

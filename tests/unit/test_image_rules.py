@@ -45,12 +45,22 @@ def _document(*pictures, page_size=A4):
     }
 
 
-def _plan(document, *, coverage=0.8, min_bytes=4096, max_per_document=500):
+def _plan(
+    document,
+    *,
+    coverage=0.8,
+    min_bytes=4096,
+    max_per_document=500,
+    header_band=0.0,
+    footer_band=0.0,
+):
     return plan_extraction(
         document,
         coverage=coverage,
         min_bytes=min_bytes,
         max_per_document=max_per_document,
+        header_band=header_band,
+        footer_band=footer_band,
     )
 
 
@@ -173,15 +183,19 @@ def test_a_page_sized_image_leaves_nothing_at_all():
     assert "Page text" in result and "More text" in result
 
 
-def test_a_skipped_picture_leaves_a_note():
-    """Information the operator would otherwise lose silently (FR-006)."""
+def test_a_skipped_picture_leaves_nothing_in_the_text():
+    """A note per skipped picture was written for the occasional one. A real document
+    skipped three and a half thousand, and the file bound for the knowledge base filled
+    with markers for pictures nobody could see. What was skipped belongs on the document,
+    not in its text (FR-006, revised)."""
     markdown = f"Text\n\n{PLACEHOLDER}\n"
     decisions = _plan(_document(_picture(payload=b"tiny")))
 
     result = rewrite_placeholders(markdown, decisions, [None])
 
     assert PLACEHOLDER not in result
-    assert "picture" in result.lower()
+    assert "picture" not in result.lower()
+    assert result.strip() == "Text"
 
 
 def test_a_count_mismatch_is_reported_not_reconciled():
@@ -244,3 +258,59 @@ def test_an_inline_picture_is_a_marker_like_any_other():
 
     assert "![](doc--abc123--img001.png)" in result
     assert "data:image" not in result
+
+
+def _banded(top: float, bottom: float, *, origin: str = "TOPLEFT", height: float = 842.0):
+    """A picture whose box runs from `top` to `bottom` as fractions down the page."""
+    if origin == "BOTTOMLEFT":
+        t, b = height * (1 - top), height * (1 - bottom)
+    else:
+        t, b = height * top, height * bottom
+    picture = _picture(bbox=(72.0, t, 300.0, b))
+    picture["prov"][0]["coord_origin"] = origin
+    return picture
+
+
+def test_a_logo_in_the_header_is_furniture():
+    """The operator's rule: a picture up there is of no use to the knowledge base. It
+    holds whatever size the logo is, which no byte threshold ever managed."""
+    (decision,) = _plan(_document(_banded(0.02, 0.08)), header_band=0.12)
+    assert decision.outcome is PictureOutcome.FURNITURE
+
+
+def test_a_mark_in_the_footer_is_furniture():
+    (decision,) = _plan(_document(_banded(0.93, 0.98)), footer_band=0.12)
+    assert decision.outcome is PictureOutcome.FURNITURE
+
+
+def test_a_figure_in_the_body_is_content():
+    (decision,) = _plan(_document(_banded(0.3, 0.6)), header_band=0.12, footer_band=0.12)
+    assert decision.outcome is PictureOutcome.EXTRACTED
+
+
+def test_a_picture_straddling_the_band_is_content():
+    """Half in the header is not furniture — it is a figure that starts high on the page."""
+    (decision,) = _plan(_document(_banded(0.08, 0.35)), header_band=0.12)
+    assert decision.outcome is PictureOutcome.EXTRACTED
+
+
+def test_the_band_is_read_the_right_way_up():
+    """`coord_origin` is TOPLEFT or BOTTOMLEFT. Read the wrong way, the header lands at
+    the bottom of the page and the rule silently protects the wrong end of it."""
+    header = _banded(0.02, 0.08, origin="BOTTOMLEFT")
+    (decision,) = _plan(_document(header), header_band=0.12, footer_band=0.0)
+    assert decision.outcome is PictureOutcome.FURNITURE
+
+    footer = _banded(0.93, 0.98, origin="BOTTOMLEFT")
+    (other,) = _plan(_document(footer), header_band=0.12, footer_band=0.0)
+    assert other.outcome is PictureOutcome.EXTRACTED
+
+
+def test_furniture_leaves_nothing_in_the_markdown():
+    markdown = f"Heading\n\n{PLACEHOLDER}\n\nBody text.\n"
+    decisions = _plan(_document(_banded(0.02, 0.08)), header_band=0.12)
+
+    result = rewrite_placeholders(markdown, decisions, [None])
+
+    assert "Heading" in result and "Body text." in result
+    assert PLACEHOLDER not in result and "picture" not in result.lower()

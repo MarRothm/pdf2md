@@ -97,8 +97,8 @@ async def test_a_figure_filling_most_of_a_page_is_still_a_figure(
     assert len(list(storage.outbox_path.glob("*.png"))) == 1
 
 
-async def test_a_skipped_picture_leaves_a_note(convert, storage, stub_engine, settings):
-    """Quickstart V4, FR-006 — the distinction from a page-sized image."""
+async def test_a_skipped_picture_leaves_nothing(convert, storage, stub_engine, settings):
+    """Quickstart V4, FR-006 as revised: the Markdown carries a reference or nothing."""
     settings.extract_images = True
     stub_engine.default_behavior = TaskBehavior(
         markdown=BODY, pictures=[StubPicture(payload=b"tiny")]
@@ -108,7 +108,7 @@ async def test_a_skipped_picture_leaves_a_note(convert, storage, stub_engine, se
 
     text = _outbox_markdown(storage)
     assert list(storage.outbox_path.glob("*.png")) == []
-    assert "picture" in text.lower()
+    assert "picture" not in text.lower()
     assert "data:image" not in text
 
 

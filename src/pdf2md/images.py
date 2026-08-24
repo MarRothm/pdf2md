@@ -51,11 +51,13 @@ def image_tokens(markdown: str) -> list[tuple[int, int, str | None]]:
 
 
 SKIPPED_NOTE = "*[a picture here was not extracted]*"
+"""Retired. Kept only so an outbox written by an earlier version can still be recognised."""
 
 
 class PictureOutcome(StrEnum):
     EXTRACTED = "extracted"
     PAGE_SIZED = "page_sized"
+    FURNITURE = "furniture"
     TOO_SMALL = "too_small"
     OVER_CEILING = "over_ceiling"
     UNUSABLE = "unusable"
@@ -114,6 +116,26 @@ def decode_data_uri(uri: object) -> tuple[bytes, str] | None:
         return None
 
 
+def vertical_span(bbox: dict, page_size: dict, origin: object) -> tuple[float, float] | None:
+    """Where a box sits down the page, as fractions from the top, whichever way up it is.
+
+    `BoundingBox.coord_origin` is `TOPLEFT` or `BOTTOMLEFT` — y grows downward in one and
+    upward in the other. Reading it the wrong way puts the header at the bottom of the
+    page, which is the kind of quiet inversion that would have looked like the rule simply
+    not working.
+    """
+    try:
+        height = float(page_size["height"])
+        low, high = sorted((float(bbox["t"]), float(bbox["b"])))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if height <= 0:
+        return None
+    if str(origin).upper().endswith("BOTTOMLEFT"):
+        return (height - high) / height, (height - low) / height
+    return low / height, high / height
+
+
 def page_coverage(bbox: dict, page_size: dict) -> float | None:
     """How much of its page a picture's bounding box covers, or None if unanswerable."""
     try:
@@ -133,6 +155,8 @@ def plan_extraction(
     coverage: float,
     min_bytes: int,
     max_per_document: int,
+    header_band: float = 0.0,
+    footer_band: float = 0.0,
     inline: list[str | None] | None = None,
 ) -> list[PictureDecision]:
     """One decision per picture, in document order — the order the placeholders are in.
@@ -152,7 +176,15 @@ def plan_extraction(
     for index, picture in enumerate(pictures):
         fallback = (inline or [None] * len(pictures))[index] if inline else None
         decision = _decide(
-            picture, pages, coverage, min_bytes, max_per_document, len(distinct), fallback
+            picture,
+            pages,
+            coverage,
+            min_bytes,
+            max_per_document,
+            len(distinct),
+            fallback,
+            header_band,
+            footer_band,
         )
         decisions.append(decision)
         if decision.outcome is PictureOutcome.EXTRACTED and decision.payload is not None:
@@ -168,6 +200,8 @@ def _decide(
     max_per_document: int,
     extracted: int,
     inline: str | None = None,
+    header_band: float = 0.0,
+    footer_band: float = 0.0,
 ) -> PictureDecision:
     if not isinstance(picture, dict):
         return PictureDecision(PictureOutcome.UNUSABLE)
@@ -198,6 +232,16 @@ def _decide(
     if fraction >= coverage:
         # The page, not a figure on it. Its text is already in the Markdown (FR-004).
         return PictureDecision(PictureOutcome.PAGE_SIZED, page_no=page_no)
+
+    span = vertical_span(
+        prov[0].get("bbox") or {}, page.get("size") or {}, prov[0].get("coord_origin")
+    )
+    if span is not None and _is_furniture(span, header_band, footer_band):
+        # A picture living entirely in the header or the footer is the page's furniture —
+        # a party logo, a mark, a rule. It repeats on every page, it is nothing the reader
+        # of the text loses, and at two per page it is what fills an outbox with thousands
+        # of files (FR-014).
+        return PictureDecision(PictureOutcome.FURNITURE, page_no=page_no)
     if len(payload) < min_bytes:
         return PictureDecision(PictureOutcome.TOO_SMALL, page_no=page_no)
     if extracted >= max_per_document:
@@ -225,6 +269,13 @@ def strip_placeholders(markdown: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(rebuilt))
 
 
+def _is_furniture(span: tuple[float, float], header_band: float, footer_band: float) -> bool:
+    top, bottom = span
+    if header_band > 0 and bottom <= header_band:
+        return True
+    return footer_band > 0 and top >= 1.0 - footer_band
+
+
 def rewrite_placeholders(
     markdown: str,
     decisions: list[PictureDecision],
@@ -250,8 +301,10 @@ def rewrite_placeholders(
         rebuilt.append(markdown[cursor:start])
         if decision.outcome is PictureOutcome.EXTRACTED and filename:
             rebuilt.append(f"![]({filename})")
-        elif decision.outcome is not PictureOutcome.PAGE_SIZED:
-            rebuilt.append(SKIPPED_NOTE)
+        # Everything else leaves nothing. A note per skipped picture was written for the
+        # occasional one; a real document skipped three and a half thousand, and the file
+        # bound for the knowledge base filled with markers for pictures nobody could see.
+        # What was skipped, and why, belongs on the document — not in its text (FR-006).
         cursor = end
     rebuilt.append(markdown[cursor:])
     return "".join(rebuilt)

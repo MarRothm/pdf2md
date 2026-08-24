@@ -61,10 +61,15 @@ JSON. `document.md_content` now carries `<!-- image -->` placeholders instead of
    depends on the export mode, and that is not a property this service should depend on.
 3. **Page-sized.** `bbox` area ÷ `pages[prov.page_no].size` area ≥ `IMAGE_PAGE_COVERAGE`
    means the picture is the page: no file, and the placeholder is removed (FR-004, FR-006).
-4. **Floor and ceiling.** Below `IMAGE_MIN_BYTES`, or past `IMAGE_MAX_PER_DOCUMENT`, the
+4. **Furniture.** A picture whose box lies entirely within `IMAGE_HEADER_BAND` of the page
+   top or `IMAGE_FOOTER_BAND` of its bottom is the page's furniture and is not extracted
+   (FR-014). `prov[].coord_origin` decides which way up the coordinates run — `TOPLEFT` or
+   `BOTTOMLEFT` — and reading it wrongly would protect the wrong end of the page while
+   appearing to work.
+5. **Floor and ceiling.** Below `IMAGE_MIN_BYTES`, or past `IMAGE_MAX_PER_DOCUMENT`, the
    picture is skipped and the placeholder becomes a note (FR-005, FR-006).
-5. **A picture with no `image`, no `prov`, or an unreadable URI** is skipped and counted,
+6. **A picture with no `image`, no `prov`, or an unreadable URI** is skipped and counted,
    never guessed at. The document still finishes (FR-012).
-6. **Nothing is fetched from a URI that is not a `data:` URI.** A picture referencing an
+7. **Nothing is fetched from a URI that is not a `data:` URI.** A picture referencing an
    http address is skipped: the engine has no route out and neither has this service
    (FR-011, feature 001 FR-021).

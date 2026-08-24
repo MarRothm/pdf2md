@@ -296,6 +296,8 @@ which is what the converter produced by default until this was changed.
 |---|---|---|
 | `PDF2MD_EXTRACT_IMAGES` | `true` | Write pictures as files. **Off does not put them back in the Markdown** — off means no pictures at all |
 | `PDF2MD_IMAGE_PAGE_COVERAGE` | `0.8` | A picture covering this much of its page is the page, not a figure, and is not extracted |
+| `PDF2MD_IMAGE_HEADER_BAND` | `0.12` | A picture entirely within this fraction of the page from the top is **furniture** — a party logo — and is not extracted |
+| `PDF2MD_IMAGE_FOOTER_BAND` | `0.12` | The same, from the bottom |
 | `PDF2MD_IMAGE_MIN_BYTES` | `4096` | Below this it is a rule or a bullet |
 | `PDF2MD_IMAGE_MAX_PER_DOCUMENT` | `500` | Safety net; past it pictures are skipped and the Markdown says so |
 
@@ -303,10 +305,15 @@ which is what the converter produced by default until this was changed.
 extracting the page as a picture would add a file per page that duplicates it. That is what
 `PAGE_SIZED` means, and it is why a two-thousand-page scan does not fill the folder.
 
-**What the Markdown says where a picture was**, in three cases and deliberately not one: a
-reference for an extracted picture; **nothing at all** for a scanned page, because a marker
-on every page would be noise; a short note for a picture skipped as too small or past the
-ceiling, because that is something you would otherwise never learn.
+**Position, not size, is what separates a logo from a figure.** The same party logo appears
+at many sizes through a contract, so no byte threshold ever divided them — but a picture
+sitting in the header band is furniture whatever its size. A 2038-page contract produced
+4,000 pictures, roughly two per page, almost all of them logos; the bands are what stop that.
+
+**The Markdown carries a reference, or nothing.** Never a note. A note per skipped picture
+was written for the occasional one, and a real document skipped three and a half thousand —
+filling the file bound for AnythingLLM with markers for pictures nobody could see. What was
+skipped is on the document and in the log instead.
 
 Images are removed when the document is deleted, replaced when it is converted again, and
 included in the *Download all files* archive. The threshold of `0.8` is reasoned, **not yet
