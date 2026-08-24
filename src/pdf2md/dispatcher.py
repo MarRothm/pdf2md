@@ -538,7 +538,7 @@ class Dispatcher:
             return
 
         self.db.finish_part(part.id, PartStatus.SUCCEEDED, markdown=result.markdown)
-        self._store_part_images(job, part, result.document, result.markdown)
+        stored = self._store_part_images(job, part, result.document, result.markdown)
         log_job(
             logger,
             "part_succeeded",
@@ -546,6 +546,9 @@ class Dispatcher:
             filename=job.submitted_filename,
             part=part.ordinal,
             pages=f"{part.first_page}-{part.last_page}",
+            # Per part, because a split document counts its pictures only at the join —
+            # which for a two-thousand-page document is an hour of no signal at all.
+            images=stored,
         )
 
     # --- keeping a part alive (FR-038) ------------------------------------
@@ -862,7 +865,7 @@ class Dispatcher:
 
     def _store_part_images(
         self, job: ConversionJob, part: ConversionPart, document: dict, result_markdown: str
-    ) -> None:
+    ) -> int:
         """Write this part's pictures to scratch and remember the plan (research R6).
 
         Ordinals are not assigned here. A part knows only its own pictures; where they sit
@@ -870,7 +873,7 @@ class Dispatcher:
         would restart at one every forty pages.
         """
         if not self.settings.extract_images or not document:
-            return
+            return 0
         decisions = plan_extraction(
             document,
             coverage=self.settings.image_page_coverage,
@@ -879,7 +882,7 @@ class Dispatcher:
             inline=[uri for _, _, uri in image_tokens(result_markdown)],
         )
         if not decisions:
-            return
+            return 0
 
         plan: list[dict] = []
         for index, decision in enumerate(decisions, start=1):
@@ -895,6 +898,7 @@ class Dispatcher:
                 entry["mimetype"] = decision.mimetype
             plan.append(entry)
         self.db.set_part_image_plan(part.id, plan)
+        return sum(1 for entry in plan if "file" in entry)
 
     def _images_from_parts(
         self, job: ConversionJob, display_name: str, parts: list[ConversionPart]

@@ -29,9 +29,13 @@ definition in `deploy/docker-compose.yml`, contracts under `specs/*/contracts/`.
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**⚠️ T005 gates everything after it. Do not start Phase 3 until it has run against the real engine.**
+**T005 ran on 2026-08-24 and passed — at the second attempt.** The first request asked for
+`image_export_mode=placeholder` and every picture came back with no image data; under
+`embedded` a running conversion put 218 pictures into the scratch area within the first few
+parts. The gate did its job: it caught a wrong reading of the engine before the feature was
+trusted, just later than it should have. See research.md R3.
 
-- [ ] T005 Run quickstart V7 on the Mac mini: convert one illustrated document and confirm `json_content.pictures[]` is non-empty, each entry carries `image.uri` beginning `data:`, `image.mimetype`, `prov[0].page_no` and `prov[0].bbox`, and that `pages[n].size` exists for that page. **If any of it is absent, stop and revisit research.md R2/R3** — the fallback is placeholder-only conversion, not a workaround in the client. Record what was observed in `specs/003-extract-images/research.md` under R3
+- [X] T005 Run quickstart V7 on the Mac mini: convert one illustrated document and confirm `json_content.pictures[]` is non-empty, each entry carries `image.uri` beginning `data:`, `image.mimetype`, `prov[0].page_no` and `prov[0].bbox`, and that `pages[n].size` exists for that page. **If any of it is absent, stop and revisit research.md R2/R3** — the fallback is placeholder-only conversion, not a workaround in the client. Record what was observed in `specs/003-extract-images/research.md` under R3
 - [X] T006 In `src/pdf2md/docling_client.py`, send `to_formats=["md","json"]`, `image_export_mode` (`placeholder`), and `include_images=true` on submit, per `contracts/docling-serve-images.md`; send `image_export_mode=placeholder` and omit the JSON format when `extract_images` is false, so the Markdown never carries picture data either way (FR-001, FR-010)
 - [X] T007 In `src/pdf2md/docling_client.py`, carry `json_content` through on `ConversionResult` without parsing it, and wire `Settings` into `DoclingClient` in `src/pdf2md/main.py` as the OCR settings already are
 - [X] T008 [P] In `tests/stubs/docling_stub.py`, let `TaskBehavior` carry pictures — a list of (data URI, mimetype, page number, bbox, page size) — and return them as `json_content.pictures[]` with `pages{}`, emitting one `<!-- image -->` per picture in `md_content`

@@ -151,4 +151,30 @@ pyproject.toml
 | The per-part watchdog is misconfigured back to per-document | Every split document dies at 45 minutes, after burning the engine time | The watchdog's shape is part of the state machine, not a setting: `timed_out` is defined per part in [data-model.md](./data-model.md), and a split document's expected runtime already exceeds any single part's allowance (research.md R12) |
 | A table spanning a part boundary is broken in the output | Table fidelity falls below SC-002 | Bounded by arithmetic — 19 seams in a 2000-page document against hundreds of tables — and gated by SC-013, which measures seam tables separately (research.md R15) |
 | Section files from a previous engine version linger in the outbox | AnythingLLM cites stale content that no longer matches the source | Re-conversion deletes that document's previous section files first, from the rows that name them — the only outbox deletion the service performs (research.md R13) |
-| `pypdf` fails to parse a PDF the engine could have handled | A convertible document is refused at upload | Parse failure at upload maps to the existing "looks damaged" message and the document can still be retried; the same parse is what makes immediate password and page-count feedback possible (research.md R11) |
+| `pypdf` fails to parse a PDF the engine could have handled | A convertible document is refused at upload | **This happened, 2026-08-24**, and the mitigation recorded here was wrong: retrying does nothing when the reader refuses the file every time, and "looks damaged" sent the operator to re-export a document that had converted for weeks. pypdf 6.16.2 added a page-tree depth limit of 100 and a merged contract collection is 101 deep. The dependency is pinned exactly, the ceiling is raised in `pdfinfo`, and the rule is now written down: **this check must never be stricter than the converter**, which reads PDFs with a different backend entirely |
+
+
+---
+
+## Phase 11 — what was built after this plan was written
+
+FR-038 through FR-043 were specified, built, and released between 2026-08-20 and 2026-08-24,
+in response to failures met in production. They are recorded here because the trail between
+spec and code is load-bearing in this repository — R4 and R6 were both wrong for days
+precisely because nobody re-read them.
+
+| Requirement | The failure that produced it | Design |
+|---|---|---|
+| **FR-038** — retry a part before it is a gap | A 2038-page document reported *Converted* with twenty of its twenty-one parts missing | A part that fails is halved and retried to a bounded depth, never below a floor; a part whose task or result the engine lost is simply converted again. Ordinals stop being reading positions, so parts are joined by first page |
+| **FR-039** — recognition language | The corpus is German; the engine's automatic OCR choice reads English and Chinese | `ocr_preset=easyocr` with `ocr_lang`, satisfiable only from weights already in the image. `ops/verify-engine-image.sh` checks they are there |
+| **FR-040** — an incomplete output is not a conversion | A holed document could not be re-converted at all: retry was refused and re-upload answered *Already converted* | An output with gaps no longer satisfies a request to convert the document, and the row grows a **Convert again** button |
+| **FR-041** — say when work is not moving | A document waited all afternoon under *Converter ready · 1 waiting*. The engine was being killed and restarted; nothing on this side reported it | Health answers whether work moves, not only whether the engine answers `/ready`: loop liveness, the converter's last refusal, and how many tasks it has forgotten. Two deadlocks behind the same silence are reconciled before submission |
+| **FR-042** — one document may not stop the service | The web container was killed and restarted every few seconds, joining a document too large for its memory limit | Recoveries are counted whatever state they resume from; past the limit the document is failed with a reason. The dispatcher stopped reading every part's Markdown on every pass |
+| **FR-043** — download the document, not its first file | A 1344-section document's Download button handed over section one | `markdown.zip`, built into a temporary file because the count is unbounded |
+
+**The pattern across all six**: in every case the system already knew what was wrong and had
+nowhere to say it. The part failure reasons existed in the database and were displayed
+nowhere; the engine's restarts were visible only as documents failing; the join happened only
+on a path a queued job never reached. Three separate diagnoses were made from page ranges
+alone, and two were wrong. Where a decision here is a guess, it is now a stack variable with
+a row in the measurements table rather than a constant in the source.

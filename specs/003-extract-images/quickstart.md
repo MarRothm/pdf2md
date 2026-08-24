@@ -106,6 +106,11 @@ line `job_succeeded` for `images=`.
 has `image.uri` beginning `data:`, `image.mimetype`, and `prov[0].page_no` and `bbox`; and
 `pages` carries a `size` for that page.
 
+**Result, 2026-08-24**: passed under `image_export_mode=embedded` — 218 pictures written to
+the scratch area from the first few parts of the 2038-page contract. It **failed** under
+`placeholder`, which is what the feature originally shipped with: the pictures were returned
+with no image data and the Markdown filled with *not extracted* notes.
+
 **If any of that is absent**, stop. The design in research R3 does not hold, and the
 alternatives — the zip target and its loss of `errors`/`status`/`processing_time` (R2) — are
 a different feature with a different cost. Do not work around it in the client.

@@ -565,3 +565,25 @@ deployed — they are measurements and confirmations, not unwritten code:
 | T091 | T089 plus the deployed stack, then `ops/measure-fidelity.py` (the harness itself is written and exercised) |
 
 `deploy/README.md` §11 is the table to record those measurements in.
+
+
+---
+
+## Phase 11: Built after this file was written (FR-038 – FR-043)
+
+**This file is a record, not a queue.** Everything below was specified, built, tested, and
+released between 2026-08-20 and 2026-08-24 against failures met in production; the tasks are
+written down after the fact so the trail from requirement to code is not missing. The design
+is in [plan.md](plan.md) Phase 11, the reasoning in the commits.
+
+- [X] T120 Retry a failed part rather than accepting a gap: halving to a bounded depth in `src/pdf2md/dispatcher.py`, `attempt` and `split_depth` on `conversion_part` (migration 004), parts joined by first page (FR-038)
+- [X] T121 Fetch the engine's own words for a failed part, so a gap carries a reason, and surface them as `missing_parts` on the job detail and in the page's detail view (FR-038)
+- [X] T122 Recognition engine and language as settings, sent per submission, with `ops/verify-engine-image.sh` checking the weights are in the image (FR-039)
+- [X] T123 Stop an incomplete output satisfying a later conversion of the same document, and offer **Convert again** for incomplete, failed, and timed-out rows (FR-040)
+- [X] T124 Report a stalled queue: dispatcher liveness, last engine refusal, and forgotten-task count on `GET /api/health`, degraded on any of them, named on the page (FR-041)
+- [X] T125 Reconcile the two states that deadlocked a split job — queued with parts in flight, and queued with every part finished (FR-041)
+- [X] T126 Count recoveries of a document and give up past the limit, so one document cannot crash-loop the service; stop reading every part's Markdown on every dispatcher pass (FR-042)
+- [X] T127 `GET /api/jobs/{job_id}/markdown.zip` for a document that produced more than one file, built into a temporary file (FR-043)
+- [X] T128 Version the page's assets and serve the page `no-cache`, so a release cannot be hidden by a browser cache
+- [X] T129 Bound every runtime dependency and pin `pypdf` exactly; raise the page-tree ceiling in `src/pdf2md/pdfinfo.py` so the upload check is never stricter than the converter
+- [X] T130 Record the reader's own words on a rejected upload (`detail=`), and stop the failure classifier matching a bare `parse` — which is the name of the engine's PDF backend
