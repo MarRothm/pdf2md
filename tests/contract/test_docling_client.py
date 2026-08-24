@@ -130,8 +130,13 @@ async def test_an_unconfigured_deployment_submits_what_it_always_did(engine, stu
 
 
 async def test_pictures_are_asked_for_as_files_not_as_markdown(stub_engine):
-    """`image_export_mode` defaults to `embedded` upstream, which is why the Markdown has
-    been carrying pictures. Never send that (feature 003, FR-001)."""
+    """`embedded` is asked for deliberately, and only when extracting.
+
+    It is the one mode that guarantees the picture bytes are present: `json_content` is
+    the same copy the Markdown is made from, so `placeholder` can leave the structure with
+    no image data at all — which it did, and every picture came back unusable. The
+    Markdown that reaches the outbox still carries none, because the bytes are taken out
+    and a reference put in their place (FR-001)."""
     client = DoclingClient(
         base_url="http://engine.test",
         api_key="test-key",
@@ -142,7 +147,7 @@ async def test_pictures_are_asked_for_as_files_not_as_markdown(stub_engine):
         await client.submit("figures.pdf", pdf_bytes(b"figures"))
 
     (submission,) = stub_engine.submissions
-    assert submission["image_export_mode"] == "placeholder"
+    assert submission["image_export_mode"] == "embedded"
     assert submission["include_images"] == "true"
     assert submission["to_formats"] == ["md", "json"]
 

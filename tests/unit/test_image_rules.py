@@ -17,6 +17,7 @@ from pdf2md.images import (
     page_coverage,
     plan_extraction,
     rewrite_placeholders,
+    strip_placeholders,
 )
 
 pytestmark = pytest.mark.unit
@@ -179,3 +180,51 @@ def test_a_count_mismatch_is_reported_not_reconciled():
 def test_no_pictures_leaves_the_markdown_exactly_as_it_was():
     markdown = "# Plain document\n\nNothing but text.\n"
     assert rewrite_placeholders(markdown, [], []) == markdown
+
+
+def test_placeholders_are_cleared_when_there_is_nothing_to_point_at():
+    """Extraction off means no pictures and no files — not a comment where each stood."""
+    markdown = f"# Contract\n\n{PLACEHOLDER}\n\nClause one.\n\n{PLACEHOLDER}\n"
+    result = strip_placeholders(markdown)
+
+    assert PLACEHOLDER not in result
+    assert "# Contract" in result and "Clause one." in result
+
+
+def test_stripping_leaves_a_document_without_pictures_alone():
+    markdown = "# Contract\n\nClause one.\n"
+    assert strip_placeholders(markdown) == markdown
+
+
+def test_stripping_does_not_leave_a_hole_in_the_text():
+    markdown = f"One.\n\n{PLACEHOLDER}\n\nTwo.\n"
+    assert strip_placeholders(markdown) == "One.\n\nTwo.\n"
+
+
+def test_bytes_are_taken_from_the_markdown_when_the_structure_has_none():
+    """The two exports are made from one copy, so which of them carries the picture bytes
+    depends on a mode this service does not fully control. Take them from either."""
+    picture = _picture()
+    picture["image"] = {"mimetype": "image/png"}  # geometry, but no data
+    (decision,) = plan_extraction(
+        _document(picture),
+        coverage=0.8,
+        min_bytes=4096,
+        max_per_document=500,
+        inline=[_uri()],
+    )
+    assert decision.outcome is PictureOutcome.EXTRACTED
+    assert decision.payload == BIG
+
+
+def test_an_inline_picture_is_a_marker_like_any_other():
+    """`embedded` mode writes the picture into the Markdown instead of a comment."""
+    markdown = f"Before\n\n![]({_uri()})\n\nAfter"
+    decisions = plan_extraction(
+        _document(_picture()), coverage=0.8, min_bytes=4096, max_per_document=500
+    )
+
+    result = rewrite_placeholders(markdown, decisions, ["doc--abc123--img001.png"])
+
+    assert "![](doc--abc123--img001.png)" in result
+    assert "data:image" not in result

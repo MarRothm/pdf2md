@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -21,6 +22,32 @@ from pdf2md.naming import IMAGE_EXTENSIONS
 
 PLACEHOLDER = "<!-- image -->"
 """What `image_export_mode=placeholder` leaves behind (contracts/docling-serve-images.md)."""
+
+INLINE_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*(data:[^)\s]+)\s*\)")
+"""What `embedded` mode leaves instead: the picture itself, inline in the Markdown.
+
+Both forms are handled. The engine's two modes are not independent of each other the way
+this feature first assumed — `json_content` is the *same copy* the Markdown is made from,
+so asking for `placeholder` can leave the structure with no picture bytes in it at all.
+Matching either token means the rewrite works whichever mode the engine was asked for, and
+a future change of its default cannot quietly empty the output."""
+
+
+def image_tokens(markdown: str) -> list[tuple[int, int, str | None]]:
+    """Every place a picture stands in the Markdown: (start, end, its data URI if inline).
+
+    In document order, which is the order `pictures[]` is in — that correspondence is the
+    only thing tying a reference to the figure it names.
+    """
+    found: list[tuple[int, int, str | None]] = []
+    for match in INLINE_IMAGE.finditer(markdown):
+        found.append((match.start(), match.end(), match.group(1)))
+    start = markdown.find(PLACEHOLDER)
+    while start != -1:
+        found.append((start, start + len(PLACEHOLDER), None))
+        start = markdown.find(PLACEHOLDER, start + 1)
+    return sorted(found)
+
 
 SKIPPED_NOTE = "*[a picture here was not extracted]*"
 
@@ -105,6 +132,7 @@ def plan_extraction(
     coverage: float,
     min_bytes: int,
     max_per_document: int,
+    inline: list[str | None] | None = None,
 ) -> list[PictureDecision]:
     """One decision per picture, in document order — the order the placeholders are in.
 
@@ -118,8 +146,11 @@ def plan_extraction(
 
     decisions: list[PictureDecision] = []
     extracted = 0
-    for picture in pictures:
-        decisions.append(_decide(picture, pages, coverage, min_bytes, max_per_document, extracted))
+    for index, picture in enumerate(pictures):
+        fallback = (inline or [None] * len(pictures))[index] if inline else None
+        decisions.append(
+            _decide(picture, pages, coverage, min_bytes, max_per_document, extracted, fallback)
+        )
         if decisions[-1].outcome is PictureOutcome.EXTRACTED:
             extracted += 1
     return decisions
@@ -132,12 +163,16 @@ def _decide(
     min_bytes: int,
     max_per_document: int,
     extracted: int,
+    inline: str | None = None,
 ) -> PictureDecision:
     if not isinstance(picture, dict):
         return PictureDecision(PictureOutcome.UNUSABLE)
 
     image = picture.get("image") if isinstance(picture.get("image"), dict) else {}
-    decoded = decode_data_uri(image.get("uri"))
+    # The structure first, the Markdown second. Which of the two carries the bytes depends
+    # on the export mode, and the two are not independent — so take them from wherever
+    # they are rather than insisting on one.
+    decoded = decode_data_uri(image.get("uri")) or decode_data_uri(inline)
     if decoded is None:
         return PictureDecision(PictureOutcome.UNUSABLE)
     payload, mimetype = decoded
@@ -166,6 +201,26 @@ def _decide(
     return PictureDecision(PictureOutcome.EXTRACTED, payload, mimetype, page_no)
 
 
+def strip_placeholders(markdown: str) -> str:
+    """Remove every picture marker, leaving the text as though none had been there.
+
+    For when there are no pictures to point at: extraction turned off, or an engine that
+    returned none. A marker is only worth keeping when it stands in for something the
+    reader can reach.
+    """
+    tokens = image_tokens(markdown)
+    if not tokens:
+        return markdown
+    rebuilt: list[str] = []
+    cursor = 0
+    for start, end, _ in tokens:
+        rebuilt.append(markdown[cursor:start])
+        cursor = end
+    rebuilt.append(markdown[cursor:])
+    # The blank lines the marker sat between would otherwise pile up where it was.
+    return re.sub(r"\n{3,}", "\n\n", "".join(rebuilt))
+
+
 def rewrite_placeholders(
     markdown: str,
     decisions: list[PictureDecision],
@@ -181,15 +236,18 @@ def rewrite_placeholders(
     if not decisions:
         return markdown
 
-    parts = markdown.split(PLACEHOLDER)
-    if len(parts) - 1 != len(decisions):
-        raise PlaceholderMismatch(f"{len(parts) - 1} placeholders for {len(decisions)} pictures")
+    tokens = image_tokens(markdown)
+    if len(tokens) != len(decisions):
+        raise PlaceholderMismatch(f"{len(tokens)} image markers for {len(decisions)} pictures")
 
-    rebuilt = [parts[0]]
-    for decision, filename, tail in zip(decisions, filenames, parts[1:], strict=True):
+    rebuilt: list[str] = []
+    cursor = 0
+    for (start, end, _), decision, filename in zip(tokens, decisions, filenames, strict=True):
+        rebuilt.append(markdown[cursor:start])
         if decision.outcome is PictureOutcome.EXTRACTED and filename:
             rebuilt.append(f"![]({filename})")
         elif decision.outcome is not PictureOutcome.PAGE_SIZED:
             rebuilt.append(SKIPPED_NOTE)
-        rebuilt.append(tail)
+        cursor = end
+    rebuilt.append(markdown[cursor:])
     return "".join(rebuilt)

@@ -85,6 +85,9 @@ class _Task:
     polls: int = 0
     result_consumed: bool = False
     position: int = 0
+    image_export_mode: str = "embedded"
+    """Remembered from the submission: it decides the shape of the result, and the two
+    shapes are genuinely different — that is what this feature got wrong."""
 
 
 class StubEngine:
@@ -179,6 +182,7 @@ class StubEngine:
                 task_id=str(uuid.uuid4()),
                 filename=files.filename or "",
                 behavior=behavior,
+                image_export_mode=image_export_mode,
                 position=len([t for t in self.tasks.values() if not t.result_consumed]),
             )
             self.tasks[task.task_id] = task
@@ -232,7 +236,17 @@ class StubEngine:
             task.result_consumed = True
             markdown = behavior.markdown
             if behavior.pictures:
-                markdown += "\n\n" + "\n\n".join("<!-- image -->" for _ in behavior.pictures)
+                # `embedded` writes the picture into the Markdown; `placeholder` leaves a
+                # comment. Both are real answers from this engine, so the stub gives back
+                # whichever was asked for.
+                markdown += "\n\n" + "\n\n".join(
+                    (
+                        f"![]({picture.as_json()['image']['uri']})"
+                        if task.image_export_mode == "embedded"
+                        else "<!-- image -->"
+                    )
+                    for picture in behavior.pictures
+                )
             document: dict[str, Any] = {
                 "md_content": markdown,
                 "json_content": {},
@@ -248,10 +262,13 @@ class StubEngine:
                         "size": {"width": width, "height": height},
                         "page_no": picture.page_no,
                     }
-                document["json_content"] = {
-                    "pictures": [picture.as_json() for picture in behavior.pictures],
-                    "pages": pages,
-                }
+                entries = [picture.as_json() for picture in behavior.pictures]
+                if task.image_export_mode != "embedded":
+                    # What the engine really does under `placeholder`: the structure is
+                    # handed back untouched, and its pictures may carry no bytes at all.
+                    for entry in entries:
+                        entry["image"] = {"mimetype": entry["image"]["mimetype"]}
+                document["json_content"] = {"pictures": entries, "pages": pages}
             if behavior.page_count is not None:
                 document["page_count"] = behavior.page_count
             return JSONResponse(

@@ -67,9 +67,25 @@ that spent this week learning what unreported failure costs.
 
 ## R3. Where the pictures actually come from
 
-**Decision**: request `to_formats=["md", "json"]` with
-`image_export_mode=placeholder`. Take the Markdown from `md_content` and the pictures from
-`json_content`.
+**Decision — corrected 2026-08-24 against a running engine**: request
+`to_formats=["md", "json"]` with **`image_export_mode=embedded`**. Take the pictures from
+`json_content`, and their bytes from either `json_content` or the Markdown, whichever
+carries them. Rewrite the Markdown ourselves so what reaches the outbox has none.
+
+> **The original decision here was wrong, and shipped.** It asked for `placeholder`,
+> assuming the Markdown's export mode and the structure's contents were independent. They
+> are not: `docling_jobkit/convert/results.py` builds one copy —
+> `new_doc = document._make_copy_with_refmode(Path(), image_mode, page_no=None)` — and
+> assigns it to `json_content` *and* serialises the Markdown from it. Under
+> `ImageRefMode.PLACEHOLDER` that copy is `self`, untouched, with no guarantee its pictures
+> carry embedded bytes; under `EMBEDDED` it is `_with_embedded_pictures()`, which is the
+> function that puts data URIs there. So every picture came back with no readable image and
+> the operator got a document of *"a picture here was not extracted"* notes.
+>
+> The lesson is not about this option. Two of this feature's engine claims were verified by
+> reading upstream source and both were wrong in the same way — reading what a function is
+> called instead of what it returns. The client now handles **both** shapes and logs which
+> one it met, because the next default change should not be able to empty the output again.
 
 **Verified structure** (`docling_core/types/doc/document.py:206,213` and
 `docling_core/types/doc/common/reference.py:83-202`):
@@ -84,9 +100,9 @@ that spent this week learning what unreported failure costs.
 
 **Rationale**: this is one fetch, of one JSON body, over the interface already in use — so
 `DOCLING_SERVE_SINGLE_USE_RESULTS` and the fetch-and-persist-in-one-step rule (feature 001
-research R3) are untouched. `placeholder` keeps picture data out of `md_content`
-unconditionally, which is what FR-001 asks for; the pictures then arrive separately, with
-enough geometry to decide which of them are figures.
+research R3) are untouched. `embedded` guarantees the bytes exist; the geometry travels
+beside them; and FR-001 is satisfied not by the mode we ask for but by the rewrite we
+perform, which is the only guarantee actually under this service's control.
 
 **Cost**: `json_content` is a full DoclingDocument and is larger than the Markdown. It is
 read once per part, converted to files, and dropped — it is never stored. Peak memory per

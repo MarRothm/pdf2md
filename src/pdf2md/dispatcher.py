@@ -29,8 +29,10 @@ from pdf2md.images import (
     PictureDecision,
     PictureOutcome,
     PlaceholderMismatch,
+    image_tokens,
     plan_extraction,
     rewrite_placeholders,
+    strip_placeholders,
 )
 from pdf2md.logging_config import log_job
 from pdf2md.models import (
@@ -536,7 +538,7 @@ class Dispatcher:
             return
 
         self.db.finish_part(part.id, PartStatus.SUCCEEDED, markdown=result.markdown)
-        self._store_part_images(job, part, result.document)
+        self._store_part_images(job, part, result.document, result.markdown)
         log_job(
             logger,
             "part_succeeded",
@@ -858,7 +860,9 @@ class Dispatcher:
 
     # --- pictures (feature 003) -------------------------------------------
 
-    def _store_part_images(self, job: ConversionJob, part: ConversionPart, document: dict) -> None:
+    def _store_part_images(
+        self, job: ConversionJob, part: ConversionPart, document: dict, result_markdown: str
+    ) -> None:
         """Write this part's pictures to scratch and remember the plan (research R6).
 
         Ordinals are not assigned here. A part knows only its own pictures; where they sit
@@ -872,6 +876,7 @@ class Dispatcher:
             coverage=self.settings.image_page_coverage,
             min_bytes=self.settings.image_min_bytes,
             max_per_document=self.settings.image_max_per_document,
+            inline=[uri for _, _, uri in image_tokens(result_markdown)],
         )
         if not decisions:
             return
@@ -962,17 +967,53 @@ class Dispatcher:
         the caller writes them before the Markdown that references them, so a failure
         leaves unreferenced files rather than references to nothing.
         """
-        if not self.settings.extract_images or not document:
-            return markdown, []
+        if not self.settings.extract_images:
+            # Off means no pictures and no image files (FR-010) — not a comment marker
+            # left where each one stood. The engine is still asked for `placeholder` mode,
+            # so the markers arrive; they are ours to clear away.
+            return strip_placeholders(markdown), []
+
+        if not document:
+            # Extraction is on and the engine returned no structure to extract from. The
+            # markers would otherwise be shipped to the knowledge base as noise, so they
+            # go — but this is said out loud, because it is what a wrong assumption about
+            # the engine looks like from here (plan.md, Risks).
+            cleaned = strip_placeholders(markdown)
+            if cleaned != markdown:
+                log_job(
+                    logger,
+                    "images_unavailable",
+                    job_id=job.id,
+                    filename=job.submitted_filename,
+                    level=logging.WARNING,
+                    reason="extraction is on but the engine returned no picture data",
+                )
+            return cleaned, []
 
         decisions = plan_extraction(
             document,
             coverage=self.settings.image_page_coverage,
             min_bytes=self.settings.image_min_bytes,
             max_per_document=self.settings.image_max_per_document,
+            inline=[uri for _, _, uri in image_tokens(markdown)],
         )
         if not decisions:
-            return markdown, []
+            return strip_placeholders(markdown), []
+
+        if all(decision.outcome is PictureOutcome.UNUSABLE for decision in decisions):
+            # Every picture in the document, and not one of them had bytes we could read.
+            # That is not a property of the document — it is the engine returning a shape
+            # this service does not know how to take pictures out of, and it is worth
+            # saying so rather than writing a file full of "not extracted" notes.
+            log_job(
+                logger,
+                "images_unusable",
+                job_id=job.id,
+                filename=job.submitted_filename,
+                level=logging.WARNING,
+                pictures=len(decisions),
+                reason="the engine returned pictures with no readable image data",
+            )
 
         filenames: list[str | None] = []
         pending: list[PendingImage] = []

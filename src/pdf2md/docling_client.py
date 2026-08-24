@@ -192,10 +192,13 @@ class DoclingClient:
             "from_formats": ["pdf"],
             "to_formats": ["md", "json"] if self.extract_images else ["md"],
             "do_ocr": "true",
-            # Never `embedded`, which is the engine's default and the reason the Markdown
-            # has been carrying pictures. `placeholder` holds whether or not we extract:
-            # a document with picture data in it cannot be ingested at all (FR-001).
-            "image_export_mode": "placeholder",
+            # `embedded` when extracting, and only then. It is the mode that guarantees
+            # the picture bytes are actually present — `json_content` is the *same copy*
+            # the Markdown is made from, so `placeholder` can leave the structure with no
+            # image data in it at all, and every picture comes back unusable. The Markdown
+            # that reaches the outbox still carries no picture data either way: we take
+            # the bytes out and put a reference in their place (FR-001).
+            "image_export_mode": "embedded" if self.extract_images else "placeholder",
             "include_images": "true" if self.extract_images else "false",
         }
         if self.ocr_preset and self.ocr_preset != "auto":
