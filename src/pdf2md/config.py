@@ -159,8 +159,8 @@ class Settings(BaseSettings):
     not yet measured: quickstart V8 is the measurement (research.md R4).
     """
 
-    image_header_band: float = 0.12
-    image_footer_band: float = 0.12
+    image_header_band: float = 0.15
+    image_footer_band: float = 0.10
     """Fractions of the page in which a picture is the page's furniture, not its content.
 
     A party logo in the header repeats on every page: it is nothing the reader of the text
@@ -168,8 +168,11 @@ class Settings(BaseSettings):
     is the operator's — *an image up there is of no use to the knowledge base* — and it
     holds whatever size the logo happens to be, which a size threshold never did.
 
-    Starting values, not measurements. 0.12 of A4 is about 3.5 cm; set them from a document
-    whose headers you can see (FR-014).
+    **Measured**, on a page of the corpus this was built for: the logo's lower edge sits at
+    10.7% of the page height, about 32 mm down an A4 sheet, and the body begins at 14.6%.
+    0.15 leaves 13 mm of margin for a logo placed lower on some other page. Being generous
+    is cheap here because a picture must lie *entirely* inside the band to count as
+    furniture — a figure that begins at 14.6% cannot also end inside the top 15% (FR-014).
     """
 
     image_min_bytes: int = 4096

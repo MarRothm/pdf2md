@@ -47,8 +47,8 @@ services:
       # A picture living entirely in the header or footer band is the page's furniture —
       # a party logo, a mark — and is not extracted at all. Size never separated those
       # from figures; position does.
-      PDF2MD_IMAGE_HEADER_BAND: ${PDF2MD_IMAGE_HEADER_BAND:-0.12}
-      PDF2MD_IMAGE_FOOTER_BAND: ${PDF2MD_IMAGE_FOOTER_BAND:-0.12}
+      PDF2MD_IMAGE_HEADER_BAND: ${PDF2MD_IMAGE_HEADER_BAND:-0.15}
+      PDF2MD_IMAGE_FOOTER_BAND: ${PDF2MD_IMAGE_FOOTER_BAND:-0.10}
       PDF2MD_IMAGE_MIN_BYTES: ${PDF2MD_IMAGE_MIN_BYTES:-4096}
       PDF2MD_IMAGE_MAX_PER_DOCUMENT: ${PDF2MD_IMAGE_MAX_PER_DOCUMENT:-500}
       PDF2MD_OCR_PRESET: ${PDF2MD_OCR_PRESET:-easyocr}

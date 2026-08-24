@@ -296,14 +296,19 @@ which is what the converter produced by default until this was changed.
 |---|---|---|
 | `PDF2MD_EXTRACT_IMAGES` | `true` | Write pictures as files. **Off does not put them back in the Markdown** — off means no pictures at all |
 | `PDF2MD_IMAGE_PAGE_COVERAGE` | `0.8` | A picture covering this much of its page is the page, not a figure, and is not extracted |
-| `PDF2MD_IMAGE_HEADER_BAND` | `0.12` | A picture entirely within this fraction of the page from the top is **furniture** — a party logo — and is not extracted |
-| `PDF2MD_IMAGE_FOOTER_BAND` | `0.12` | The same, from the bottom |
+| `PDF2MD_IMAGE_HEADER_BAND` | `0.15` | A picture entirely within this fraction of the page from the top is **furniture** — a party logo — and is not extracted |
+| `PDF2MD_IMAGE_FOOTER_BAND` | `0.10` | The same, from the bottom |
 | `PDF2MD_IMAGE_MIN_BYTES` | `4096` | Below this it is a rule or a bullet |
 | `PDF2MD_IMAGE_MAX_PER_DOCUMENT` | `500` | Safety net; past it pictures are skipped and the Markdown says so |
 
 **A scanned page produces no image file.** Its text is already in the Markdown, recognised;
 extracting the page as a picture would add a file per page that duplicates it. That is what
 `PAGE_SIZED` means, and it is why a two-thousand-page scan does not fill the folder.
+
+**These two are measured, not guessed.** On a page of this corpus the logo's lower edge
+sits at 10.7% of the page height — about 32 mm down an A4 sheet — and the body text begins
+at 14.6%. A band of 0.15 leaves 13 mm of margin for a logo placed lower on some other page,
+and cannot swallow a figure, because furniture has to lie *entirely* inside the band.
 
 **Position, not size, is what separates a logo from a figure.** The same party logo appears
 at many sizes through a contract, so no byte threshold ever divided them — but a picture

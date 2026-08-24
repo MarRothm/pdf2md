@@ -314,3 +314,20 @@ def test_furniture_leaves_nothing_in_the_markdown():
 
     assert "Heading" in result and "Body text." in result
     assert PLACEHOLDER not in result and "picture" not in result.lower()
+
+
+def test_the_measured_logo_falls_inside_the_shipped_band():
+    """The corpus this was built for: the logo's lower edge at 10.7% of the page, the body
+    beginning at 14.6%. Measured off a page, not reasoned from what a header ought to be —
+    the last number in this feature chosen the other way was aimed at scans the corpus does
+    not contain."""
+    from pdf2md.config import Settings
+
+    settings = Settings(engine_api_key="k")
+    logo = _banded(0.062, 0.107)
+    (decision,) = _plan(_document(logo), header_band=settings.image_header_band)
+    assert decision.outcome is PictureOutcome.FURNITURE
+
+    body_figure = _banded(0.146, 0.40)
+    (other,) = _plan(_document(body_figure), header_band=settings.image_header_band)
+    assert other.outcome is PictureOutcome.EXTRACTED
