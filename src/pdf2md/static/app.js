@@ -312,15 +312,21 @@ function renderActions(job) {
   if (job.download_url) {
     const link = document.createElement("a");
     link.className = "download";
-    // A sectioned document's own download is section one of hundreds. Offer the archive
-    // instead, and say how many files are in it (FR-043).
-    const bundled = job.download_all_url && job.output_file_count > 1;
+    // A sectioned document's own download is section one of hundreds, and a document with
+    // pictures is more than its Markdown. Offer the archive whenever the server says there
+    // is one, and say how many files are in it (FR-043).
+    //
+    // Gated on `output_file_count > 1` this missed the commonest case of all: one Markdown
+    // file and forty pictures counts as one file, so the row handed over the Markdown alone
+    // while the archive sat there complete.
+    const bundled = Boolean(job.download_all_url);
+    const total = (job.output_file_count || 0) + (job.image_count || 0);
     link.href = bundled ? job.download_all_url : job.download_url;
     // Labelled, not named after the file: a section filename is long enough to have
     // been a width problem of its own. The name is in the title and in the detail view.
-    link.textContent = bundled ? `Download ${job.output_file_count} files` : "Download";
+    link.textContent = bundled ? `Download ${total} files` : "Download";
     link.title = bundled
-      ? `All ${job.output_file_count} Markdown files for this document, as a zip`
+      ? `Everything this document produced — Markdown and pictures — as a zip`
       : job.output_filename || "";
     link.setAttribute("download", "");
     stack.append(link);

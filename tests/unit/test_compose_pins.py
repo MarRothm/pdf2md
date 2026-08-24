@@ -149,3 +149,40 @@ def test_every_shipped_setting_is_in_the_stack_contract() -> None:
         name for name in set(re.findall(r"PDF2MD_[A-Z_]+", web)) if name not in contract
     )
     assert not missing, f"shipped but undocumented in stack.md: {', '.join(missing)}"
+
+
+def test_no_setting_can_be_set_and_then_ignored() -> None:
+    """The third direction of drift, and the one nothing was watching.
+
+    Two guards already exist — documented but not passed to the container, and shipped but
+    absent from the contract. Neither catches a setting an operator has in their stack that
+    the compose file never mentions: `PDF2MD_SECTION_MIN_BYTES`, `PDF2MD_SECTION_MAX_BYTES`
+    and `PDF2MD_ENGINE_HEALTH_PATH` were all set on the deployed stack and read by nothing,
+    so tuning them changed the service's behaviour not at all.
+    """
+    settings_module = (COMPOSE_PATH.parents[1] / "src" / "pdf2md" / "config.py").read_text()
+    wired = set(
+        re.findall(r"PDF2MD_[A-Z_]+", yaml.safe_dump(yaml.safe_load(COMPOSE_PATH.read_text())))
+    )
+
+    declared = {
+        f"PDF2MD_{name.upper()}"
+        for name in re.findall(
+            r"^    ([a-z_]+): (?:int|float|str|bool|Path|list|dict)\b",
+            settings_module,
+            re.MULTILINE,
+        )
+    }
+    # Deliberately not operator-facing, each for a stated reason.
+    internal = {
+        "PDF2MD_DISPATCHER_ENABLED",  # a test seam; the dispatcher is always on in a deploy
+        "PDF2MD_ENGINE_URL",  # fixed by the stack's own topology, not a choice
+        "PDF2MD_ENGINE_API_KEY",  # the one secret; no default, set on the deployment form
+        # A switch that turns off the refusal to run against a publicly routable engine
+        # (FR-021). It exists so tests can point at a stub. Offering it in the stack file
+        # would be offering a way to send these documents off the machine by mistake.
+        "PDF2MD_REQUIRE_PRIVATE_ENGINE_URL",
+    }
+
+    missing = sorted(declared - wired - internal)
+    assert not missing, f"declared as settings but not passed to the container: {missing}"

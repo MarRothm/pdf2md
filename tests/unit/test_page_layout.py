@@ -199,3 +199,14 @@ def test_a_resumed_split_document_says_how_much_survived() -> None:
 
 def test_a_split_document_that_has_done_nothing_yet_is_just_queued() -> None:
     assert display_status(JobStatus.QUEUED, part_count=58, parts_completed=0) == "Queued"
+
+
+def test_the_archive_link_is_offered_whenever_the_server_says_there_is_one():
+    """Gated on the Markdown count instead, the row missed the commonest case there is:
+    one Markdown file and forty pictures counts as one file, so the button handed over the
+    Markdown alone while the archive sat there complete (FR-043)."""
+    script = (STATIC_DIR / "app.js").read_text()
+    assert "const bundled = Boolean(job.download_all_url)" in script
+    assert "job.output_file_count > 1" not in script, (
+        "the archive must not be gated on the Markdown count"
+    )

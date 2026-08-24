@@ -88,6 +88,10 @@ volumes:
 | `PDF2MD_INBOX_RETENTION_HOURS` | `48` | PDF reaping after a job succeeds |
 | `PDF2MD_FAILED_INBOX_RETENTION_DAYS` | `14` | Failed and timed-out jobs keep their source PDF this long so a retry is possible |
 | `PDF2MD_SUSPECT_MIN_CHARS_PER_PAGE` | `50` | Below this yield a conversion reports as suspect rather than plain success (FR-029) |
+| `PDF2MD_SUSPECT_MIN_CHARS_FLOOR` | `200` | Flat floor applied when the engine reports no page count, so a suspect yield is still caught (FR-029) |
+| `PDF2MD_IN_FLIGHT_BUFFER` | `1` | Documents allowed in the engine beyond its worker count, so a worker is never idle waiting for the next submission (FR-027) |
+| `PDF2MD_ENGINE_CONNECT_TIMEOUT` | `10` | Seconds to reach the engine. Short: an engine that is not answering should surface as degraded health, not as a hung request |
+| `PDF2MD_ENGINE_READ_TIMEOUT` | `120` | Seconds for one API call. Not the conversion budget — conversions are polled, and the ceiling on those is `JOB_TIMEOUT_SECONDS` |
 | `PDF2MD_JOB_HISTORY_DAYS` | `30` | History pruning; never touches the outbox |
 | `PDF2MD_PART_MAX_PAGES` | `40` | Documents longer than this are split. A part has to fit inside every ceiling at once — the engine's 2400 s per submission, the memory each container is given, and the engine's page limit — and which one binds is a property of the corpus, not of this setting. Measured on the real corpus: ~0.6 s/page for born-digital text, 2–6.5 s/page for pages of images and spreadsheet layouts. The former default of `100` was derived from an assumed 10 s/page that was never measured (research.md R6, R12) |
 | `PDF2MD_MAX_TOTAL_PAGES` | `10000` | Refused at upload above this (FR-036). With `PARTS_IN_FLIGHT` already bounding queue slots, this ceiling mostly bounds **wall-clock time**: 10 000 pages is 100 parts, roughly 14 hours at two in flight. Set it to the longest single document worth occupying the converter for |
@@ -109,6 +113,7 @@ volumes:
 | `PDF2MD_SECTION_SPLIT_THRESHOLD_BYTES` | `1048576` | Above this, output is written as section files (FR-033) |
 | `PDF2MD_SECTION_MIN_BYTES` | `16384` | Sections smaller than this merge into the previous one |
 | `PDF2MD_SECTION_MAX_BYTES` | `524288` | Sections larger than this are divided at the next heading level |
+| `PDF2MD_ENGINE_HEALTH_PATH` | `/ready` | `/ready` gates on model loading; `/health` only reports that the process is up (research.md O1). Settable so a future engine that moves the endpoint does not need a rebuild |
 | `PDF2MD_LOG_LEVEL` | `INFO` | Job-level logs viewable in Portainer (FR-019) |
 
 ## Environment — `docling`
