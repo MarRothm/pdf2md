@@ -71,7 +71,8 @@ class Storage:
         self.part_file(content_hash, ordinal).unlink(missing_ok=True)
 
     def delete_part_files(self, content_hash: str) -> None:
-        for path in self.inbox_path.glob(f"{content_hash}--part*.pdf"):
+        """Sweep a document's scratch — the page-range PDFs and the pictures cut from them."""
+        for path in self.inbox_path.glob(f"{content_hash}--part*"):
             path.unlink(missing_ok=True)
 
     # --- outbox -----------------------------------------------------------
@@ -102,6 +103,38 @@ class Storage:
             temp_path.unlink(missing_ok=True)
             raise
         return len(payload)
+
+    def write_outbox_image_atomic(self, image_filename: str, payload: bytes) -> int:
+        """Write one extracted picture into the outbox; returns the byte count.
+
+        Same temp-file-and-rename discipline as the Markdown writer, for the same reason:
+        a reader must never find a half-written file where a reference points.
+        """
+        self.outbox_path.mkdir(parents=True, exist_ok=True)
+        destination = self.outbox_file(image_filename)
+        handle, temp_name = tempfile.mkstemp(
+            dir=self.outbox_path, prefix=f".{image_filename}.", suffix=".tmp"
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(handle, "wb") as file:
+                file.write(payload)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temp_path, destination)
+            _fsync_directory(self.outbox_path)
+        except OSError:
+            temp_path.unlink(missing_ok=True)
+            raise
+        return len(payload)
+
+    def part_image_file(self, content_hash: str, part_ordinal: int, index: int, ext: str) -> Path:
+        """A picture a part left behind, waiting for the join to name it (research R6).
+
+        Scratch on the inbox volume, beside the part PDFs: durable across a restart, swept
+        with them, and never held in memory as a document's worth of pictures at once.
+        """
+        return self.inbox_path / f"{content_hash}--part{part_ordinal:03d}--img{index:03d}.{ext}"
 
     def delete_outbox_file(self, output_filename: str) -> None:
         """Remove a file this service previously wrote.

@@ -109,6 +109,11 @@ The list the page polls (FR-010). Returns most recent first.
 
 `status` is the machine vocabulary from [data-model.md](../data-model.md); `display_status` is the user-facing string, so the page never maps states itself — `succeeded_suspect` renders as *Converted — check output* (FR-029), and a split document in progress renders as *Converting — part 7 of 25* (FR-037). `download_url` is populated for `succeeded`, `succeeded_suspect`, `succeeded_incomplete`, and `already_converted`.
 
+`image_count` is how many pictures were extracted for the document (feature 003). The
+archive at `markdown.zip` carries them alongside the Markdown, so a reference resolves
+inside it as it does in the outbox, and `download_all_url` is set when the document
+produced more than one file **of any kind**.
+
 `output_file_count` is how many files the document produced and `output_bytes` their
 total size — both aggregates over the document, not properties of `output_filename`, which
 names only the first (FR-043).

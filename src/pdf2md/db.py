@@ -29,6 +29,7 @@ from pdf2md.models import (
     Backlog,
     ConversionJob,
     ConversionPart,
+    ExtractedImage,
     JobStatus,
     MarkdownOutput,
     PartStatus,
@@ -180,6 +181,39 @@ SCHEMA: list[tuple[str, str]] = [
         """
         ALTER TABLE conversion_part ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1;
         ALTER TABLE conversion_part ADD COLUMN split_depth INTEGER NOT NULL DEFAULT 0;
+        """,
+    ),
+    (
+        # Pictures are files in the outbox now, not bytes inside the Markdown. A row per
+        # file is what makes each one findable, replaceable, and deletable: nothing in
+        # this service removes an outbox file it cannot name from the database, and
+        # nothing ever scans the folder (feature 002 INV-2, feature 003 data-model.md).
+        "005_extracted_images",
+        """
+        CREATE TABLE extracted_image (
+          image_filename TEXT PRIMARY KEY,
+          content_hash   TEXT NOT NULL REFERENCES source_document(content_hash),
+          job_id         TEXT NOT NULL,
+          ordinal        INTEGER NOT NULL,
+          page_no        INTEGER,
+          mimetype       TEXT NOT NULL,
+          bytes          INTEGER NOT NULL,
+          written_at     TEXT NOT NULL
+        );
+
+        CREATE INDEX idx_image_hash ON extracted_image(content_hash);
+
+        ALTER TABLE source_document ADD COLUMN image_count INTEGER NOT NULL DEFAULT 0;
+        """,
+    ),
+    (
+        # A part knows its own pictures but not their place in the document: ordinals are
+        # document-wide and can only be assigned once every part is in (research R6). The
+        # plan a part fetched is therefore kept until the join, which turns scratch files
+        # into named outbox files and rewrites the placeholders.
+        "006_part_image_plan",
+        """
+        ALTER TABLE conversion_part ADD COLUMN image_plan TEXT;
         """,
     ),
 ]
@@ -556,12 +590,21 @@ class Database:
             output_filename=output_filename,
         )
 
+    def images_for_hash(self, content_hash: str) -> list[ExtractedImage]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM extracted_image WHERE content_hash = ? ORDER BY ordinal",
+                (content_hash,),
+            ).fetchall()
+        return [ExtractedImage(**dict(row)) for row in rows]
+
     def record_outputs_and_finish(
         self,
         *,
         job_id: str,
         content_hash: str,
         outputs: list[tuple[str, int, int | None, str | None]],
+        images: list[tuple[str, int, int, int | None, str]] | None = None,
         engine_status: str,
         status: JobStatus,
         engine_errors: list[str] | None = None,
@@ -595,6 +638,22 @@ class Database:
                     "   section_title = excluded.section_title",
                     (name, content_hash, job_id, size_bytes, stamp, engine_status, ordinal, title),
                 )
+            for name, size_bytes, ordinal, page_no, mimetype in images or []:
+                conn.execute(
+                    "INSERT INTO extracted_image"
+                    " (image_filename, content_hash, job_id, ordinal, page_no, mimetype,"
+                    "  bytes, written_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(image_filename) DO UPDATE SET"
+                    "   job_id = excluded.job_id, ordinal = excluded.ordinal,"
+                    "   page_no = excluded.page_no, mimetype = excluded.mimetype,"
+                    "   bytes = excluded.bytes, written_at = excluded.written_at",
+                    (name, content_hash, job_id, ordinal, page_no, mimetype, size_bytes, stamp),
+                )
+            conn.execute(
+                "UPDATE source_document SET image_count = ? WHERE content_hash = ?",
+                (len(images or []), content_hash),
+            )
             if page_count is not None:
                 conn.execute(
                     "UPDATE source_document SET page_count = ? WHERE content_hash = ?",
@@ -720,7 +779,7 @@ class Database:
         columns = (
             "id, job_id, ordinal, first_page, last_page, part_path, status, engine_task_id,"
             " NULL AS markdown, failure_reason, created_at, started_at, ended_at, attempt,"
-            " split_depth"
+            " split_depth, image_plan"
         )
         with self.connection() as conn:
             rows = conn.execute(f"SELECT {columns}{self._PARTS_IN_READING_ORDER}", (job_id,))
@@ -746,6 +805,14 @@ class Database:
                 "UPDATE conversion_part SET status = 'running',"
                 " started_at = COALESCE(started_at, ?) WHERE id = ?",
                 (now_iso(), part_id),
+            )
+
+    def set_part_image_plan(self, part_id: str, plan: list[dict]) -> None:
+        """What this part's pictures are, and where its scratch files sit (research R6)."""
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE conversion_part SET image_plan = ? WHERE id = ?",
+                (json.dumps(plan), part_id),
             )
 
     def finish_part(
@@ -934,6 +1001,7 @@ class Database:
                 ).fetchall()
             ]
             conn.execute("DELETE FROM conversion_job WHERE content_hash = ?", (content_hash,))
+            conn.execute("DELETE FROM extracted_image WHERE content_hash = ?", (content_hash,))
             conn.execute("DELETE FROM markdown_output WHERE content_hash = ?", (content_hash,))
             conn.execute("DELETE FROM source_document WHERE content_hash = ?", (content_hash,))
         return job_ids
@@ -974,6 +1042,8 @@ class JobView:
     output_bytes: int | None
     """Across every file the document produced, not just the first one."""
 
+    image_count: int
+
     output_file_count: int
     engine_status: str | None
 
@@ -984,7 +1054,7 @@ class JobView:
 # document's output is how a 1344-file conversion looked like a single small one.
 _JOB_VIEW_SELECT = """
     SELECT j.*, d.size_bytes AS doc_size_bytes, d.page_count AS doc_page_count,
-           d.original_filename AS doc_original_filename,
+           d.original_filename AS doc_original_filename, d.image_count AS doc_image_count,
            (SELECT SUM(m.bytes) FROM markdown_output m
              WHERE m.content_hash = j.content_hash) AS output_bytes,
            (SELECT COUNT(*) FROM markdown_output m
@@ -1005,6 +1075,7 @@ def _row_to_view(row: sqlite3.Row) -> JobView:
         original_filename=data["doc_original_filename"],
         output_bytes=data["output_bytes"],
         output_file_count=int(data["output_file_count"] or 0),
+        image_count=int(data["doc_image_count"] or 0),
         engine_status=data["output_engine_status"],
     )
 

@@ -105,6 +105,31 @@ one transaction, exactly as they are for an unsplit document.
 
 ---
 
+### ExtractedImage
+
+One picture taken from a document and written to the outbox, referenced from the Markdown
+rather than carried inside it (feature 003). Full definition in
+[that feature's data model](../003-extract-images/data-model.md); the essential point here
+is that it obeys the same rule as every other outbox file — **a file this service can
+remove is a file it can name from the database**, and nothing ever scans the folder.
+
+| Field | Type | Notes |
+|---|---|---|
+| `image_filename` | TEXT PK | `{slug}--{hash12}--img{NNN}.{ext}` |
+| `content_hash` | TEXT FK → `source_document.content_hash` | Deletion and supersession key on this |
+| `job_id` | TEXT | The conversion that wrote the current file |
+| `ordinal` | INTEGER | 1-based, document order across every part |
+| `page_no` | INTEGER NULL | Source page, for tracing a figure back to the PDF |
+| `mimetype` / `bytes` / `written_at` | | |
+
+`source_document.image_count` records how many the current conversion produced, which is
+what separates *a document with no pictures* from *one whose pictures were not extracted*.
+
+`conversion_part.image_plan` holds a part's picture plan as JSON until the join can give
+its pictures document-wide ordinals.
+
+---
+
 ### MarkdownOutput
 
 The result of a successful conversion, as written to the outbox.

@@ -127,3 +127,32 @@ async def test_an_unconfigured_deployment_submits_what_it_always_did(engine, stu
     (submission,) = stub_engine.submissions
     assert submission["ocr_preset"] == "auto"
     assert submission["ocr_lang"] == []
+
+
+async def test_pictures_are_asked_for_as_files_not_as_markdown(stub_engine):
+    """`image_export_mode` defaults to `embedded` upstream, which is why the Markdown has
+    been carrying pictures. Never send that (feature 003, FR-001)."""
+    client = DoclingClient(
+        base_url="http://engine.test",
+        api_key="test-key",
+        transport=httpx.ASGITransport(app=stub_engine.app),
+        extract_images=True,
+    )
+    async with client:
+        await client.submit("figures.pdf", pdf_bytes(b"figures"))
+
+    (submission,) = stub_engine.submissions
+    assert submission["image_export_mode"] == "placeholder"
+    assert submission["include_images"] == "true"
+    assert submission["to_formats"] == ["md", "json"]
+
+
+async def test_extraction_off_still_keeps_pictures_out_of_the_markdown(engine, stub_engine):
+    """Off is not the old behaviour: nothing puts picture data back in the file."""
+    async with engine:
+        await engine.submit("plain.pdf", pdf_bytes(b"plain"))
+
+    (submission,) = stub_engine.submissions
+    assert submission["image_export_mode"] == "placeholder"
+    assert submission["include_images"] == "false"
+    assert submission["to_formats"] == ["md"]

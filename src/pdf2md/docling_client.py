@@ -55,6 +55,13 @@ class ConversionResult:
     errors: list[str] = field(default_factory=list)
     processing_time: float | None = None
     page_count: int | None = None
+    document: dict = field(default_factory=dict)
+    """The engine's own document structure, carried through unparsed.
+
+    Pictures live here — `pictures[].image.uri` with `prov[].page_no` and `bbox`, against
+    `pages[n].size` — which is what lets them be written as files instead of inlined into
+    the Markdown (feature 003, contracts/docling-serve-images.md). Requested only when
+    extraction is on; `{}` otherwise."""
 
 
 # Failure text is written for the person who uploaded the document, not for us
@@ -119,12 +126,14 @@ class DoclingClient:
         health_path: str = "/ready",
         ocr_preset: str = "auto",
         ocr_languages: list[str] | None = None,
+        extract_images: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.health_path = health_path
         self.ocr_preset = ocr_preset
         self.ocr_languages = ocr_languages or []
+        self.extract_images = extract_images
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             transport=transport,
@@ -159,8 +168,13 @@ class DoclingClient:
         files = {"files": (filename, payload, "application/pdf")}
         data: dict[str, object] = {
             "from_formats": ["pdf"],
-            "to_formats": ["md"],
+            "to_formats": ["md", "json"] if self.extract_images else ["md"],
             "do_ocr": "true",
+            # Never `embedded`, which is the engine's default and the reason the Markdown
+            # has been carrying pictures. `placeholder` holds whether or not we extract:
+            # a document with picture data in it cannot be ingested at all (FR-001).
+            "image_export_mode": "placeholder",
+            "include_images": "true" if self.extract_images else "false",
         }
         if self.ocr_preset and self.ocr_preset != "auto":
             data["ocr_preset"] = self.ocr_preset
@@ -185,12 +199,14 @@ class DoclingClient:
         """Called exactly once per job — the engine will not serve it again."""
         body = await self._request("GET", f"/v1/result/{task_id}")
         document = body.get("document") or {}
+        structure = document.get("json_content")
         return ConversionResult(
             markdown=document.get("md_content") or "",
             status=str(body.get("status") or EngineStatus.FAILURE),
             errors=[str(error) for error in (body.get("errors") or [])],
             processing_time=body.get("processing_time"),
             page_count=_page_count(body, document),
+            document=structure if isinstance(structure, dict) else {},
         )
 
     async def is_healthy(self) -> bool:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from pathlib import Path
 
@@ -23,6 +24,14 @@ from pdf2md.docling_client import (
     TaskNotFoundError,
     TaskStatus,
 )
+from pdf2md.images import (
+    PendingImage,
+    PictureDecision,
+    PictureOutcome,
+    PlaceholderMismatch,
+    plan_extraction,
+    rewrite_placeholders,
+)
 from pdf2md.logging_config import log_job
 from pdf2md.models import (
     TERMINAL_PART_STATUSES,
@@ -32,7 +41,7 @@ from pdf2md.models import (
     JobStatus,
     PartStatus,
 )
-from pdf2md.naming import output_filename
+from pdf2md.naming import IMAGE_EXTENSIONS, image_filename, output_filename
 from pdf2md.pdfinfo import PdfStructureError, extract_range, plan_parts
 from pdf2md.sectioning import section_filename, split_into_sections
 from pdf2md.storage import Storage, reap_inbox
@@ -527,6 +536,7 @@ class Dispatcher:
             return
 
         self.db.finish_part(part.id, PartStatus.SUCCEEDED, markdown=result.markdown)
+        self._store_part_images(job, part, result.document)
         log_job(
             logger,
             "part_succeeded",
@@ -677,14 +687,21 @@ class Dispatcher:
             )
             return
 
-        markdown = _join_parts(parts)
-        self.storage.delete_part_files(job.content_hash)
+        source = self.db.get_source_document(job.content_hash)
+        display_name = source.original_filename if source else job.submitted_filename
+        rewritten, images = self._images_from_parts(job, display_name, parts)
+
+        markdown = _join_parts(parts, rewritten)
         self.persist_markdown(
             job,
             markdown,
             engine_status=EngineStatus.SUCCESS,
             missing_ranges=missing or None,
+            images=images,
         )
+        # Swept only once the pictures are in the outbox: a failure before that leaves the
+        # scratch in place, and the document can be converted again from it.
+        self.storage.delete_part_files(job.content_hash)
 
     # --- polling ----------------------------------------------------------
 
@@ -836,7 +853,163 @@ class Dispatcher:
             errors=result.errors,
             engine_page_count=result.page_count,
             processing_time=result.processing_time,
+            document=result.document,
         )
+
+    # --- pictures (feature 003) -------------------------------------------
+
+    def _store_part_images(self, job: ConversionJob, part: ConversionPart, document: dict) -> None:
+        """Write this part's pictures to scratch and remember the plan (research R6).
+
+        Ordinals are not assigned here. A part knows only its own pictures; where they sit
+        in the document is a question only the join can answer, and numbering per part
+        would restart at one every forty pages.
+        """
+        if not self.settings.extract_images or not document:
+            return
+        decisions = plan_extraction(
+            document,
+            coverage=self.settings.image_page_coverage,
+            min_bytes=self.settings.image_min_bytes,
+            max_per_document=self.settings.image_max_per_document,
+        )
+        if not decisions:
+            return
+
+        plan: list[dict] = []
+        for index, decision in enumerate(decisions, start=1):
+            entry: dict = {"outcome": decision.outcome.value, "page_no": decision.page_no}
+            if decision.outcome is PictureOutcome.EXTRACTED:
+                assert decision.payload is not None and decision.mimetype is not None
+                extension = IMAGE_EXTENSIONS[decision.mimetype]
+                scratch = self.storage.part_image_file(
+                    job.content_hash, part.ordinal, index, extension
+                )
+                scratch.write_bytes(decision.payload)
+                entry["file"] = scratch.name
+                entry["mimetype"] = decision.mimetype
+            plan.append(entry)
+        self.db.set_part_image_plan(part.id, plan)
+
+    def _images_from_parts(
+        self, job: ConversionJob, display_name: str, parts: list[ConversionPart]
+    ) -> tuple[dict[str, str], list[PendingImage]]:
+        """Name every part's pictures in document order and rewrite its placeholders.
+
+        Returns the Markdown to use for each succeeded part, and the pictures to move into
+        the outbox. The ceiling is applied again here, across the whole document rather
+        than per part — forty parts of twenty figures is eight hundred files, and each part
+        thought itself well inside the limit.
+        """
+        rewritten: dict[str, str] = {}
+        pending: list[PendingImage] = []
+        if not self.settings.extract_images:
+            return rewritten, pending
+
+        for part in parts:
+            if part.status is not PartStatus.SUCCEEDED or part.markdown is None:
+                continue
+            plan = json.loads(part.image_plan) if part.image_plan else []
+            if not plan:
+                continue
+
+            decisions: list[PictureDecision] = []
+            filenames: list[str | None] = []
+            for entry in plan:
+                outcome = PictureOutcome(entry["outcome"])
+                if outcome is PictureOutcome.EXTRACTED and len(pending) >= (
+                    self.settings.image_max_per_document
+                ):
+                    outcome = PictureOutcome.OVER_CEILING
+                decisions.append(PictureDecision(outcome, page_no=entry.get("page_no")))
+                if outcome is not PictureOutcome.EXTRACTED:
+                    filenames.append(None)
+                    continue
+                ordinal = len(pending) + 1
+                name = image_filename(display_name, job.content_hash, ordinal, entry["mimetype"])
+                filenames.append(name)
+                pending.append(
+                    PendingImage(
+                        filename=name,
+                        ordinal=ordinal,
+                        page_no=entry.get("page_no"),
+                        mimetype=entry["mimetype"],
+                        source=self.storage.inbox_path / entry["file"],
+                    )
+                )
+            try:
+                rewritten[part.id] = rewrite_placeholders(part.markdown, decisions, filenames)
+            except PlaceholderMismatch as error:
+                log_job(
+                    logger,
+                    "images_skipped",
+                    job_id=job.id,
+                    filename=job.submitted_filename,
+                    level=logging.WARNING,
+                    part=part.ordinal,
+                    reason=str(error),
+                )
+                for _ in range(sum(1 for name in filenames if name)):
+                    pending.pop()
+        return rewritten, pending
+
+    def extract_images(
+        self, job: ConversionJob, display_name: str, markdown: str, document: dict
+    ) -> tuple[str, list[PendingImage]]:
+        """Decide which pictures are figures, name them, and rewrite the Markdown.
+
+        Returns the rewritten Markdown and the pictures to write. Nothing is written here:
+        the caller writes them before the Markdown that references them, so a failure
+        leaves unreferenced files rather than references to nothing.
+        """
+        if not self.settings.extract_images or not document:
+            return markdown, []
+
+        decisions = plan_extraction(
+            document,
+            coverage=self.settings.image_page_coverage,
+            min_bytes=self.settings.image_min_bytes,
+            max_per_document=self.settings.image_max_per_document,
+        )
+        if not decisions:
+            return markdown, []
+
+        filenames: list[str | None] = []
+        pending: list[PendingImage] = []
+        for decision in decisions:
+            if decision.outcome is not PictureOutcome.EXTRACTED:
+                filenames.append(None)
+                continue
+            assert decision.payload is not None and decision.mimetype is not None
+            ordinal = len(pending) + 1
+            name = image_filename(display_name, job.content_hash, ordinal, decision.mimetype)
+            filenames.append(name)
+            pending.append(
+                PendingImage(
+                    filename=name,
+                    ordinal=ordinal,
+                    page_no=decision.page_no,
+                    mimetype=decision.mimetype,
+                    payload=decision.payload,
+                )
+            )
+
+        try:
+            rewritten = rewrite_placeholders(markdown, decisions, filenames)
+        except PlaceholderMismatch as error:
+            # Every reference after the discrepancy would name the wrong figure. Keep the
+            # placeholders — they carry no picture data either, so FR-001 still holds —
+            # and say so rather than writing a document that cites the wrong pictures.
+            log_job(
+                logger,
+                "images_skipped",
+                job_id=job.id,
+                filename=job.submitted_filename,
+                level=logging.WARNING,
+                reason=str(error),
+            )
+            return markdown, []
+        return rewritten, pending
 
     # --- writing the output, however many files it turns out to be --------
 
@@ -850,6 +1023,8 @@ class Dispatcher:
         engine_page_count: int | None = None,
         processing_time: float | None = None,
         missing_ranges: list[tuple[int, int]] | None = None,
+        document: dict | None = None,
+        images: list[PendingImage] | None = None,
     ) -> None:
         """Write a finished document to the outbox and end the job.
 
@@ -857,9 +1032,11 @@ class Dispatcher:
         for section files gets them either way — FR-033 keys on the size of the Markdown,
         not on whether the PDF happened to need splitting.
         """
-        document = self.db.get_source_document(job.content_hash)
-        display_name = document.original_filename if document else job.submitted_filename
-        page_count = engine_page_count or (document.page_count if document else None)
+        source = self.db.get_source_document(job.content_hash)
+        display_name = source.original_filename if source else job.submitted_filename
+        page_count = engine_page_count or (source.page_count if source else None)
+        if images is None:
+            markdown, images = self.extract_images(job, display_name, markdown, document or {})
 
         if missing_ranges:
             status = JobStatus.SUCCEEDED_INCOMPLETE
@@ -872,7 +1049,26 @@ class Dispatcher:
         previous = {output.output_filename for output in self.db.outputs_for_hash(job.content_hash)}
         superseded = sorted(previous - {name for name, _, _, _ in files})
 
+        previous_images = {
+            image.image_filename for image in self.db.images_for_hash(job.content_hash)
+        }
+        superseded_images = sorted(previous_images - {image.filename for image in images})
+
         try:
+            # Pictures first: a failure then leaves files nothing points at, rather than
+            # references pointing at files that were never written (plan.md, Risks).
+            stored: list[tuple[str, int, int, int | None, str]] = []
+            for image in images:
+                payload = image.payload
+                if payload is None and image.source is not None:
+                    payload = Path(str(image.source)).read_bytes()
+                if payload is None:
+                    continue
+                size_bytes = self.storage.write_outbox_image_atomic(image.filename, payload)
+                stored.append(
+                    (image.filename, size_bytes, image.ordinal, image.page_no, image.mimetype)
+                )
+
             written: list[tuple[str, int, int | None, str | None]] = []
             for name, text, ordinal, title in files:
                 size_bytes = self.storage.write_outbox_atomic(name, text)
@@ -881,6 +1077,7 @@ class Dispatcher:
                 job_id=job.id,
                 content_hash=job.content_hash,
                 outputs=written,
+                images=stored,
                 engine_status=engine_status,
                 status=status,
                 engine_errors=errors or None,
@@ -888,7 +1085,7 @@ class Dispatcher:
                 missing_page_ranges=missing_ranges,
                 superseded=superseded,
             )
-            for stale in superseded:
+            for stale in (*superseded, *superseded_images):
                 self.storage.delete_outbox_file(stale)
         except Exception:
             self.db.finish_job(job.id, JobStatus.FAILED, failure_reason=LOST_RESULT_REASON)
@@ -913,6 +1110,7 @@ class Dispatcher:
             output=written[0][0],
             output_bytes=sum(size for _, size, _, _ in written),
             output_files=len(written),
+            images=len(images),
             engine_status=engine_status,
             processing_seconds=processing_time,
         )
@@ -1043,7 +1241,7 @@ class Dispatcher:
             logger.info("history_pruned jobs=%d", pruned)
 
 
-def _join_parts(parts: list[ConversionPart]) -> str:
+def _join_parts(parts: list[ConversionPart], rewritten: dict[str, str] | None = None) -> str:
     """Concatenate the parts in reading order, marking any gap where it falls.
 
     The marker goes in the Markdown itself, not only on the page: job history is pruned
@@ -1056,7 +1254,7 @@ def _join_parts(parts: list[ConversionPart]) -> str:
     # replacements at the end of the table, and they belong where their pages are (FR-038).
     for part in sorted(parts, key=lambda part: part.first_page):
         if part.status is PartStatus.SUCCEEDED and part.markdown is not None:
-            pieces.append(part.markdown)
+            pieces.append((rewritten or {}).get(part.id, part.markdown))
         else:
             pieces.append(
                 f"\n\n> **Pages {part.first_page}-{part.last_page} are missing from this "

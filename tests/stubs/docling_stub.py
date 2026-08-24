@@ -7,6 +7,7 @@ mount it over an httpx ASGI transport, so no 4.4 GB image is needed to develop.
 
 from __future__ import annotations
 
+import base64
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,6 +22,31 @@ DEFAULT_MARKDOWN = (
     "document of plausible size rather than one that trips the suspect-yield floor.\n\n"
     "| Quarter | Revenue |\n| --- | --- |\n| Q1 | 1,204 |\n| Q2 | 1,588 |\n"
 )
+
+
+@dataclass
+class StubPicture:
+    """One picture as the engine reports it (contracts/docling-serve-images.md).
+
+    `bbox` and `page_size` are what decide figure from scanned page, so a test can put a
+    picture at any coverage of its page and see which side of the rule it lands on.
+    """
+
+    payload: bytes = b"\x89PNG\r\n\x1a\n" + b"pixels" * 800
+    mimetype: str = "image/png"
+    page_no: int = 1
+    bbox: tuple[float, float, float, float] = (72.0, 700.0, 300.0, 500.0)  # l, t, r, b
+    page_size: tuple[float, float] = (595.0, 842.0)
+
+    def as_json(self) -> dict[str, Any]:
+        uri = f"data:{self.mimetype};base64," + base64.b64encode(self.payload).decode()
+        left, top, right, bottom = self.bbox
+        return {
+            "image": {"mimetype": self.mimetype, "dpi": 144, "uri": uri},
+            "prov": [
+                {"page_no": self.page_no, "bbox": {"l": left, "t": top, "r": right, "b": bottom}}
+            ],
+        }
 
 
 @dataclass
@@ -45,6 +71,10 @@ class TaskBehavior:
     task_status_on_finish: str = "success"  # success | failure
     result_http_error: int | None = None
     """Return this HTTP status from /v1/result, to exercise a lost result."""
+
+    pictures: list[StubPicture] = field(default_factory=list)
+    """Returned as `json_content.pictures[]`, with one `<!-- image -->` appended to the
+    Markdown for each — the engine's `placeholder` mode (feature 003)."""
 
 
 @dataclass
@@ -123,6 +153,8 @@ class StubEngine:
             do_ocr: str = Form(default="false"),
             ocr_preset: str = Form(default="auto"),
             ocr_lang: list[str] = Form(default=[]),
+            image_export_mode: str = Form(default="embedded"),
+            include_images: str = Form(default="true"),
         ) -> JSONResponse:
             self._check_key(request)
             payload = await files.read()
@@ -135,6 +167,8 @@ class StubEngine:
                     "do_ocr": do_ocr,
                     "ocr_preset": ocr_preset,
                     "ocr_lang": ocr_lang,
+                    "image_export_mode": image_export_mode,
+                    "include_images": include_images,
                 }
             )
             behavior = self.behavior_for(files.filename or "")
@@ -196,13 +230,28 @@ class StubEngine:
                 # DOCLING_SERVE_SINGLE_USE_RESULTS: a result is served exactly once.
                 raise HTTPException(status_code=404, detail="result already consumed")
             task.result_consumed = True
+            markdown = behavior.markdown
+            if behavior.pictures:
+                markdown += "\n\n" + "\n\n".join("<!-- image -->" for _ in behavior.pictures)
             document: dict[str, Any] = {
-                "md_content": behavior.markdown,
+                "md_content": markdown,
                 "json_content": {},
                 "html_content": "",
                 "text_content": "",
                 "doctags_content": "",
             }
+            if behavior.pictures:
+                pages: dict[str, Any] = {}
+                for picture in behavior.pictures:
+                    width, height = picture.page_size
+                    pages[str(picture.page_no)] = {
+                        "size": {"width": width, "height": height},
+                        "page_no": picture.page_no,
+                    }
+                document["json_content"] = {
+                    "pictures": [picture.as_json() for picture in behavior.pictures],
+                    "pages": pages,
+                }
             if behavior.page_count is not None:
                 document["page_count"] = behavior.page_count
             return JSONResponse(

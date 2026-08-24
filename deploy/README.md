@@ -155,7 +155,7 @@ after a release.** Skipping two releases in a row makes the image on the Mac min
 unobtainable, so a host rebuild at that version becomes impossible.
 
 Only the web image moves this way. The engine is upstream and pinned separately; upgrading
-it is a bigger decision because it changes layout analysis (§11).
+it is a bigger decision because it changes layout analysis (§12).
 
 To see whether anything is waiting for a release: `git log --oneline $(git describe --tags --abbrev=0)..HEAD`
 
@@ -280,7 +280,41 @@ becomes a gap is a *time* limit. If long scans start reporting missing pages, lo
 
 ---
 
-## 7. Health and logs
+## 7. Pictures
+
+Pictures are **never** carried inside the Markdown. They are written to the output folder as
+files, and the Markdown references them:
+
+```markdown
+![](vertragswerk--4f2a91b0c7d3--img007.png)
+```
+
+This is not tidiness. AnythingLLM cannot ingest a document with picture data inside it,
+which is what the converter produced by default until this was changed.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PDF2MD_EXTRACT_IMAGES` | `true` | Write pictures as files. **Off does not put them back in the Markdown** — off means no pictures at all |
+| `PDF2MD_IMAGE_PAGE_COVERAGE` | `0.8` | A picture covering this much of its page is the page, not a figure, and is not extracted |
+| `PDF2MD_IMAGE_MIN_BYTES` | `4096` | Below this it is a rule or a bullet |
+| `PDF2MD_IMAGE_MAX_PER_DOCUMENT` | `500` | Safety net; past it pictures are skipped and the Markdown says so |
+
+**A scanned page produces no image file.** Its text is already in the Markdown, recognised;
+extracting the page as a picture would add a file per page that duplicates it. That is what
+`PAGE_SIZED` means, and it is why a two-thousand-page scan does not fill the folder.
+
+**What the Markdown says where a picture was**, in three cases and deliberately not one: a
+reference for an extracted picture; **nothing at all** for a scanned page, because a marker
+on every page would be noise; a short note for a picture skipped as too small or past the
+ceiling, because that is something you would otherwise never learn.
+
+Images are removed when the document is deleted, replaced when it is converted again, and
+included in the *Download all files* archive. The threshold of `0.8` is reasoned, **not yet
+measured** against a real corpus — see the measurements table at the end.
+
+---
+
+## 8. Health and logs
 
 - **Portainer's health column** reflects real checks: `/healthz` on the web service and
   the engine's own health endpoint (FR-018).
@@ -296,7 +330,7 @@ queue and convert when the engine returns.
 
 ---
 
-## 8. How the isolation works, and how to prove it
+## 9. How the isolation works, and how to prove it
 
 Isolation here is a property of the stack file, not a promise or a host firewall rule.
 That matters because a Portainer redeploy carries the stack file with it and would not
@@ -361,7 +395,7 @@ not be immediately open to the network.
 
 ---
 
-## 9. Importing into AnythingLLM
+## 10. Importing into AnythingLLM
 
 Delivery into AnythingLLM is deliberately manual — the stack writes files, you decide
 when to ingest them.
@@ -407,7 +441,7 @@ accident.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
@@ -427,7 +461,7 @@ accident.
 
 ---
 
-## 11. Version pinning, and what has been verified
+## 12. Version pinning, and what has been verified
 
 Both images are pinned by tag **and** digest. The tag is for humans; the digest is the
 actual pin, because a tag can be re-pointed upstream and a digest cannot.
@@ -463,7 +497,7 @@ shows up there and nowhere else.
 
 ---
 
-## 12. Measurements to record here
+## 13. Measurements to record here
 
 These come from the deployed stack and belong in this file once run, so the next person
 inherits numbers rather than assumptions.
@@ -473,5 +507,6 @@ inherits numbers rather than assumptions.
 | Engine memory under a 50-document batch, and the `DOCLING_MEM_LIMIT` it implies | `docker stats` during quickstart V9 | _not yet measured. The limit is 16g — set clear of any plausible working set, not tuned to one. At 5g the engine was killed on image-heavy pages while 37 GB of the 42.1 GB VM sat unused (research.md R6)_ |
 | 20-page text PDF conversion time (SC-003: under 3 minutes) | Convert one and time it | _not yet measured_ |
 | Clean-host deploy time from this document alone (SC-004: under 30 minutes) | Time a deploy on a fresh host | _not yet measured_ |
+| Picture extraction: the 0.8 page-coverage threshold against real scans, and what extraction costs in time (feature 003 SC-007, SC-008) | Convert one illustrated document with `PDF2MD_EXTRACT_IMAGES` true and false | _not yet measured_ |
 | Fidelity against the corpus (SC-001, SC-002, FR-004) | `python3 ops/measure-fidelity.py --base-url http://<ip>:8080` | _not yet measured — corpus not assembled_ |
 | AnythingLLM spot checks (SC-009: ≥9 of 10 cite the right document) | Import the outbox, ask 10 questions | _not yet measured_ |

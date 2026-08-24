@@ -488,6 +488,7 @@ function factsOf(detail) {
     ["Parts", detail.part_count > 1 ? `${detail.parts_completed} of ${detail.part_count}` : null],
     ["Size", formatBytes(detail.size_bytes)],
     ["Pages", detail.page_count],
+    ["Pictures", detail.image_count ? `${detail.image_count} extracted` : null],
     ["Attempt", detail.attempt],
     ["Submitted", formatTime(detail.created_at)],
     ["Started", formatTime(detail.started_at)],
@@ -572,6 +573,17 @@ function confirmationBody(job, detail, entries) {
       ? `This removes all ${entries} entries for this document, and everything it produced.`
       : "This removes the entry and everything it produced.";
   body.append(what);
+
+  if (detail.image_count) {
+    // Counted, not listed: a document can have hundreds of pictures, and a confirmation
+    // nobody reads to the end is not a confirmation (feature 003 FR-008).
+    const pictures = document.createElement("p");
+    pictures.textContent =
+      detail.image_count === 1
+        ? "The picture extracted from it is removed as well."
+        : `The ${detail.image_count} pictures extracted from it are removed as well.`;
+    body.append(pictures);
+  }
 
   // Every file for the document, whichever conversion wrote it. Built from `outputs`
   // instead, an already-converted row would promise to remove nothing (X4).

@@ -140,6 +140,32 @@ class Settings(BaseSettings):
     `latin_g2` model that is present, and anything else does not.
     """
 
+    # --- pictures (FR-001 through FR-013 of feature 003) ------------------
+    extract_images: bool = True
+    """Take pictures out of the Markdown and write them as files.
+
+    Off, the Markdown still carries no picture data — it carries nothing where a picture
+    was. This is not the old behaviour and does not offer it back: the knowledge base
+    cannot ingest a document with pictures inside it, which is the whole reason the
+    feature exists (FR-001, FR-010).
+    """
+
+    image_page_coverage: float = 0.8
+    """Fraction of its page a picture must cover to count as the page rather than a figure.
+
+    A scanned page's picture covers essentially all of it and is not extracted — its text
+    is already in the Markdown (FR-004). A figure filling most of a page still leaves
+    margins, a header, and a caption, which is why this is 0.8 and not tighter. Reasoned,
+    not yet measured: quickstart V8 is the measurement (research.md R4).
+    """
+
+    image_min_bytes: int = 4096
+    """Below this a picture is a rule, a bullet, or a spacer, not a figure (FR-005)."""
+
+    image_max_per_document: int = 500
+    """A safety net for a document that defeats the coverage rule. Past it pictures are
+    skipped and the Markdown says so, rather than filling the outbox (FR-005, FR-006)."""
+
     @property
     def ocr_languages(self) -> list[str]:
         return [item.strip() for item in self.ocr_lang.split(",") if item.strip()]

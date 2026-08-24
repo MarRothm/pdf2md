@@ -174,6 +174,28 @@ class ConversionPart(BaseModel):
     split_depth: int = 0
     """How often this range has already been halved after running out of time (FR-038)."""
 
+    image_plan: str | None = None
+    """JSON: what this part's pictures are and where its scratch files sit, until the join
+    can give them document-wide ordinals (feature 003, research R6)."""
+
+
+class ExtractedImage(BaseModel):
+    """One picture written to the outbox and referenced from the Markdown (feature 003).
+
+    The row is what makes the file findable, replaceable, and deletable: nothing in this
+    service removes an outbox file it cannot name from the database, and nothing scans the
+    folder (feature 002 INV-2).
+    """
+
+    image_filename: str
+    content_hash: str
+    job_id: str
+    ordinal: int
+    page_no: int | None = None
+    mimetype: str
+    bytes: int
+    written_at: str
+
 
 class MarkdownOutput(BaseModel):
     output_filename: str
@@ -234,6 +256,9 @@ class JobSummary(BaseModel):
     one of many, which is why `download_all_url` exists (FR-043)."""
 
     output_file_count: int = 1
+    image_count: int = 0
+    """Pictures extracted for this document. Distinguishes a document with no pictures
+    from one whose pictures were not extracted (feature 003, FR-013)."""
     download_url: str | None
     download_all_url: str | None = None
     """Every file the document produced, as one archive. Set only when there is more

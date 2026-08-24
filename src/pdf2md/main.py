@@ -95,6 +95,7 @@ def create_app(
             health_path=resolved.engine_health_path,
             ocr_preset=resolved.ocr_preset,
             ocr_languages=resolved.ocr_languages,
+            extract_images=resolved.extract_images,
         )
         dispatcher = Dispatcher(db=db, storage=storage, engine=engine, settings=resolved)
 

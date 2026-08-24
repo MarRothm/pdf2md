@@ -70,6 +70,10 @@ def _delete_one(db: Database, storage: Storage, content_hash: str, filename: str
     # Only names this service recorded as its own output. Never a directory scan, never a
     # path from the request (INV-2).
     output_filenames = [output.output_filename for output in db.outputs_for_hash(content_hash)]
+    # A picture is part of what the conversion produced (feature 003 FR-008). Left behind,
+    # it is exactly the orphan in the outbox that this feature exists to prevent — and it
+    # is only removable because a row records its name; nothing here ever scans the folder.
+    output_filenames += [image.image_filename for image in db.images_for_hash(content_hash)]
 
     removed, kept = storage.delete_outbox_files(output_filenames)
 

@@ -35,6 +35,35 @@ def output_filename(original_name: str, content_hash: str) -> str:
     return f"{slugify(original_name)}--{content_hash[:HASH_PREFIX_LENGTH]}.md"
 
 
+IMAGE_EXTENSIONS: dict[str, str] = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/tiff": "tiff",
+    "image/bmp": "bmp",
+}
+
+
+def image_filename(original_name: str, content_hash: str, ordinal: int, mimetype: str) -> str:
+    """`{slug}--{hash12}--img{NNN}.{ext}` for one extracted picture (FR-007).
+
+    The document's own prefix, so its files sort together in the folder the operator
+    opens, and an ordinal in document order so a reference is stable across conversions.
+
+    An unknown mimetype raises rather than guessing an extension: a file the operator's
+    viewer cannot open is a reference that does not resolve, which FR-003 calls a defect.
+    """
+    extension = IMAGE_EXTENSIONS.get(mimetype.split(";")[0].strip().lower())
+    if extension is None:
+        raise ValueError(f"not a storable image type: {mimetype}")
+    if ordinal < 1:
+        raise ValueError("image ordinals are 1-based")
+    stem = output_filename(original_name, content_hash).removesuffix(".md")
+    return f"{stem}--img{ordinal:03d}.{extension}"
+
+
 def archive_filename(original_name: str, content_hash: str) -> str:
     """The download name for every file of one document, bundled (FR-043).
 

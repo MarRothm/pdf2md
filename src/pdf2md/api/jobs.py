@@ -153,10 +153,10 @@ async def download_all_markdown(request: Request, job_id: str) -> FileResponse:
             "The Markdown will be available when it finishes.",
         )
 
+    recorded = [output.output_filename for output in db.outputs_for_hash(job.content_hash)]
+    recorded += [image.image_filename for image in db.images_for_hash(job.content_hash)]
     present = [
-        (output.output_filename, storage.outbox_file(output.output_filename))
-        for output in db.outputs_for_hash(job.content_hash)
-        if storage.has_outbox_file(output.output_filename)
+        (name, storage.outbox_file(name)) for name in recorded if storage.has_outbox_file(name)
     ]
     if not present:
         raise ApiError(
@@ -305,10 +305,11 @@ def to_summary(view: JobView) -> JobSummary:
         failure_reason=job.failure_reason,
         output_filename=job.output_filename,
         output_file_count=view.output_file_count,
+        image_count=view.image_count,
         download_url=f"/api/jobs/{job.id}/markdown" if downloadable else None,
         download_all_url=(
             f"/api/jobs/{job.id}/markdown.zip"
-            if downloadable and view.output_file_count > 1
+            if downloadable and (view.output_file_count + view.image_count) > 1
             else None
         ),
         engine_status=view.engine_status,

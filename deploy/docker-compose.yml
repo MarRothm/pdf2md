@@ -39,6 +39,13 @@ services:
       # `latin_g2` models are baked into the pinned engine image, and `latin_g2` is a
       # Latin-script model that covers German. Any language set here must be satisfiable
       # from those weights; nothing can be downloaded at runtime (FR-022, FR-039).
+      # Pictures are written as files and referenced, never carried inside the Markdown:
+      # AnythingLLM cannot ingest a document that contains them. A page-sized image is not
+      # a figure and is not extracted — its text is already in the Markdown (FR-004).
+      PDF2MD_EXTRACT_IMAGES: ${PDF2MD_EXTRACT_IMAGES:-true}
+      PDF2MD_IMAGE_PAGE_COVERAGE: ${PDF2MD_IMAGE_PAGE_COVERAGE:-0.8}
+      PDF2MD_IMAGE_MIN_BYTES: ${PDF2MD_IMAGE_MIN_BYTES:-4096}
+      PDF2MD_IMAGE_MAX_PER_DOCUMENT: ${PDF2MD_IMAGE_MAX_PER_DOCUMENT:-500}
       PDF2MD_OCR_PRESET: ${PDF2MD_OCR_PRESET:-easyocr}
       PDF2MD_OCR_LANG: ${PDF2MD_OCR_LANG:-de,en}
       # Splitting. The part size is sized to the engine's *time* ceiling above, not to a
