@@ -101,12 +101,28 @@ def test_a_picture_below_the_floor_is_a_rule_or_a_bullet():
 
 
 def test_the_ceiling_stops_a_document_filling_the_outbox():
-    decisions = _plan(_document(_picture(), _picture(), _picture()), max_per_document=2)
+    """Counted in distinct pictures, because that is what fills the folder."""
+    three = [
+        _picture(payload=BIG + b"a"),
+        _picture(payload=BIG + b"b"),
+        _picture(payload=BIG + b"c"),
+    ]
+    decisions = _plan(_document(*three), max_per_document=2)
     assert [d.outcome for d in decisions] == [
         PictureOutcome.EXTRACTED,
         PictureOutcome.EXTRACTED,
         PictureOutcome.OVER_CEILING,
     ]
+
+
+def test_the_same_picture_repeated_costs_one_place_at_the_ceiling():
+    """A letterhead on every page must not spend the whole allowance on itself."""
+    letterhead = _picture()
+    decisions = _plan(
+        _document(letterhead, letterhead, letterhead, _picture(payload=BIG + b"figure")),
+        max_per_document=2,
+    )
+    assert [d.outcome for d in decisions] == [PictureOutcome.EXTRACTED] * 4
 
 
 def test_a_picture_without_provenance_is_not_guessed_at():

@@ -19,6 +19,16 @@ pytestmark = pytest.mark.integration
 BODY = "# Contract\n\n" + "clause " * 200
 
 
+def _distinct(index: object, **kwargs) -> StubPicture:
+    """A picture no other picture is byte-identical to.
+
+    Identical pictures are now one file with many references, so a test that means
+    *several figures* has to say so — and one that means *the same letterhead again* can
+    now say that too.
+    """
+    return StubPicture(payload=StubPicture().payload + str(index).encode(), **kwargs)
+
+
 def _outbox_markdown(storage):
     return next(iter(storage.outbox_path.glob("*.md"))).read_text()
 
@@ -44,7 +54,7 @@ async def test_references_resolve_to_files_on_disk(convert, client, storage, stu
     """FR-003 — read back from the folder, not from the string we wrote."""
     settings.extract_images = True
     stub_engine.default_behavior = TaskBehavior(
-        markdown=BODY, pictures=[StubPicture(), StubPicture(page_no=1)]
+        markdown=BODY, pictures=[_distinct(1), _distinct(2)]
     )
 
     detail = await _detail(client, await convert(("figures.pdf", pdf_bytes(b"two"))))
@@ -54,7 +64,6 @@ async def test_references_resolve_to_files_on_disk(convert, client, storage, stu
     assert len(referenced) == 2
     for name in referenced:
         assert (storage.outbox_path / name).is_file()
-        assert (storage.outbox_path / name).read_bytes() == StubPicture().payload
     assert detail["image_count"] == 2
 
 
@@ -137,7 +146,7 @@ async def test_re_conversion_leaves_no_orphaned_pictures(
     """
     settings.extract_images = True
     stub_engine.default_behavior = TaskBehavior(
-        markdown=BODY, pictures=[StubPicture(), StubPicture()]
+        markdown=BODY, pictures=[_distinct(1), _distinct(2)]
     )
     response = await convert(("again.pdf", pdf_bytes(b"again")))
     assert len(list(storage.outbox_path.glob("*.png"))) == 2
@@ -167,7 +176,7 @@ async def test_pictures_are_numbered_once_across_a_split_document(
     for pages in ("1-10", "11-20", "21-25"):
         stub_engine.set_behavior(
             f"long.pdf (pages {pages})",
-            TaskBehavior(markdown=BODY, pictures=[StubPicture(), StubPicture()]),
+            TaskBehavior(markdown=BODY, pictures=[_distinct(f"{pages}a"), _distinct(f"{pages}b")]),
         )
 
     detail = await _detail(client, await convert(("long.pdf", pdf_bytes(b"split", pages=25))))
@@ -250,3 +259,45 @@ async def test_deleting_one_document_leaves_another_document_pictures(
     survivors = list(storage.outbox_path.glob("*.png"))
     assert len(survivors) == 1
     assert survivors[0].name.startswith("two--")
+
+
+async def test_the_same_picture_is_written_once_however_often_it_appears(
+    convert, client, storage, stub_engine, settings
+):
+    """A letterhead on every page of a two-thousand-page contract is one picture.
+
+    Without this a real document produced roughly one file per page — 1,500 of them, of
+    which a few dozen were distinct — and the outbox became unusable while the per-document
+    ceiling cut the tail off the document (spec Edge Cases).
+    """
+    settings.extract_images = True
+    letterhead = _distinct("letterhead")
+    stub_engine.default_behavior = TaskBehavior(
+        markdown=BODY, pictures=[letterhead, _distinct("figure"), letterhead, letterhead]
+    )
+
+    detail = await _detail(client, await convert(("repeated.pdf", pdf_bytes(b"rep"))))
+
+    written = list(storage.outbox_path.glob("*.png"))
+    assert len(written) == 2, "two distinct pictures, whatever the reference count"
+    assert detail["image_count"] == 2
+
+    referenced = re.findall(r"!\[\]\(([^)]+)\)", _outbox_markdown(storage))
+    assert len(referenced) == 4, "every place the picture stood still points at it"
+    assert len(set(referenced)) == 2
+    for name in referenced:
+        assert (storage.outbox_path / name).is_file()
+
+
+async def test_the_ceiling_counts_distinct_pictures(convert, storage, stub_engine, settings):
+    """The limit exists to bound the folder, and the folder holds distinct files."""
+    settings.extract_images = True
+    settings.image_max_per_document = 2
+    repeated = _distinct("same")
+    stub_engine.default_behavior = TaskBehavior(
+        markdown=BODY, pictures=[repeated] * 5 + [_distinct("other")]
+    )
+
+    await convert(("ceiling.pdf", pdf_bytes(b"ceil")))
+
+    assert len(list(storage.outbox_path.glob("*.png"))) == 2

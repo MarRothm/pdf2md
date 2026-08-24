@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -145,14 +146,17 @@ def plan_extraction(
     pages = document.get("pages") if isinstance(document.get("pages"), dict) else {}
 
     decisions: list[PictureDecision] = []
-    extracted = 0
+    # The ceiling bounds the *folder*, and the folder holds distinct pictures: a letterhead
+    # repeated on every page is one file however many times it appears (FR-005).
+    distinct: set[str] = set()
     for index, picture in enumerate(pictures):
         fallback = (inline or [None] * len(pictures))[index] if inline else None
-        decisions.append(
-            _decide(picture, pages, coverage, min_bytes, max_per_document, extracted, fallback)
+        decision = _decide(
+            picture, pages, coverage, min_bytes, max_per_document, len(distinct), fallback
         )
-        if decisions[-1].outcome is PictureOutcome.EXTRACTED:
-            extracted += 1
+        decisions.append(decision)
+        if decision.outcome is PictureOutcome.EXTRACTED and decision.payload is not None:
+            distinct.add(hashlib.sha256(decision.payload).hexdigest())
     return decisions
 
 

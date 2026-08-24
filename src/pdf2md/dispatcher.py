@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -912,6 +913,9 @@ class Dispatcher:
         """
         rewritten: dict[str, str] = {}
         pending: list[PendingImage] = []
+        seen: dict[str, str] = {}
+        """Digest to filename, across the whole document. A letterhead on every page of a
+        two-thousand-page contract is one picture, not two thousand files."""
         if not self.settings.extract_images:
             return rewritten, pending
 
@@ -926,7 +930,7 @@ class Dispatcher:
             filenames: list[str | None] = []
             for entry in plan:
                 outcome = PictureOutcome(entry["outcome"])
-                if outcome is PictureOutcome.EXTRACTED and len(pending) >= (
+                if outcome is PictureOutcome.EXTRACTED and len(seen) >= (
                     self.settings.image_max_per_document
                 ):
                     outcome = PictureOutcome.OVER_CEILING
@@ -934,8 +938,33 @@ class Dispatcher:
                 if outcome is not PictureOutcome.EXTRACTED:
                     filenames.append(None)
                     continue
+                scratch = self.storage.inbox_path / entry["file"]
+                try:
+                    digest = hashlib.sha256(scratch.read_bytes()).hexdigest()
+                except OSError:
+                    # The picture this part left behind is gone. Say so and carry on: a
+                    # reference to a file that is not there is the one thing FR-003 calls
+                    # a defect, so it must not be written.
+                    log_job(
+                        logger,
+                        "image_missing",
+                        job_id=job.id,
+                        filename=job.submitted_filename,
+                        level=logging.WARNING,
+                        part=part.ordinal,
+                        scratch=entry["file"],
+                    )
+                    decisions[-1] = PictureDecision(
+                        PictureOutcome.UNUSABLE, page_no=entry.get("page_no")
+                    )
+                    filenames.append(None)
+                    continue
+                if digest in seen:
+                    filenames.append(seen[digest])
+                    continue
                 ordinal = len(pending) + 1
                 name = image_filename(display_name, job.content_hash, ordinal, entry["mimetype"])
+                seen[digest] = name
                 filenames.append(name)
                 pending.append(
                     PendingImage(
@@ -943,7 +972,7 @@ class Dispatcher:
                         ordinal=ordinal,
                         page_no=entry.get("page_no"),
                         mimetype=entry["mimetype"],
-                        source=self.storage.inbox_path / entry["file"],
+                        source=scratch,
                     )
                 )
             try:
@@ -1021,13 +1050,21 @@ class Dispatcher:
 
         filenames: list[str | None] = []
         pending: list[PendingImage] = []
+        seen: dict[str, str] = {}
         for decision in decisions:
             if decision.outcome is not PictureOutcome.EXTRACTED:
                 filenames.append(None)
                 continue
             assert decision.payload is not None and decision.mimetype is not None
+            digest = hashlib.sha256(decision.payload).hexdigest()
+            if digest in seen:
+                # The same picture again — a letterhead, a logo, a stamp. One file, as
+                # many references as there are places it appears (FR-005).
+                filenames.append(seen[digest])
+                continue
             ordinal = len(pending) + 1
             name = image_filename(display_name, job.content_hash, ordinal, decision.mimetype)
+            seen[digest] = name
             filenames.append(name)
             pending.append(
                 PendingImage(
