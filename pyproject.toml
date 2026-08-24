@@ -3,14 +3,25 @@ name = "pdf2md"
 dynamic = ["version"]
 description = "Offline PDF-to-Markdown web service in front of a docling-serve engine"
 requires-python = ">=3.12"
+# Bounded, because the image is the deliverable. The engine is pinned by tag *and*
+# digest and the stack refuses a moving tag (FR-032) — and then this floated every
+# library inside our own image, so two builds of the same commit produced different
+# software. `pypdf>=5.1` spanned two major versions; the 1.9.0 image was the first
+# built after pypdf 6.16.2 was released and it refused a document that 6.16.1, in
+# every earlier image and in CI, had read without complaint.
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.32",
-    "httpx>=0.27",
-    "python-multipart>=0.0.12",
-    "pydantic>=2.9",
-    "pydantic-settings>=2.6",
-    "pypdf>=5.1",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    "httpx>=0.27,<1",
+    "python-multipart>=0.0.12,<0.1",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6,<3",
+    # Exact. This one reads every uploaded document before anything else happens, so a
+    # stricter release rejects files at the door and the operator sees only "damaged" —
+    # which is what 6.16.2 did, with a new page-tree depth limit of 100 against a contract
+    # collection nested 101 deep (see `pdfinfo.PAGE_TREE_MAX_DEPTH`). Move it deliberately,
+    # and only against a document that is known to convert.
+    "pypdf==6.16.2",
 ]
 
 [project.optional-dependencies]

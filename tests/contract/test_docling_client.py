@@ -156,3 +156,22 @@ async def test_extraction_off_still_keeps_pictures_out_of_the_markdown(engine, s
     assert submission["image_export_mode"] == "placeholder"
     assert submission["include_images"] == "false"
     assert submission["to_formats"] == ["md"]
+
+
+def test_the_backend_name_is_not_a_diagnosis():
+    """`docling_parse` is what the engine's PDF backend is called. Matching a bare "parse"
+    turned every error that named it into "your file is damaged" — sending the operator to
+    re-export a document that had converted perfectly well the week before."""
+    reason = DoclingClient.failure_reason_from(
+        engine_status="failure",
+        errors=["DoclingParseV4DocumentBackend: conversion failed for page 12"],
+    )
+    assert "damaged" not in reason
+    assert "not one this service recognises" in reason
+
+
+def test_a_real_parse_failure_still_says_so():
+    reason = DoclingClient.failure_reason_from(
+        engine_status="failure", errors=["failed to parse xref table"]
+    )
+    assert "damaged or incomplete" in reason

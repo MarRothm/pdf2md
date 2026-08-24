@@ -1,7 +1,12 @@
 """Reading a PDF's structure, and telling the three failure modes apart (research.md R11)."""
 
-import pytest
+import io
 
+import pytest
+from pypdf import PdfWriter
+from pypdf.generic import ArrayObject, DictionaryObject, NameObject, NumberObject
+
+from pdf2md import pdfinfo
 from pdf2md.pdfinfo import (
     EncryptedPdfError,
     UnreadablePdfError,
@@ -80,3 +85,52 @@ def test_extract_range_refuses_a_range_outside_the_document(tmp_path):
     source = _write(tmp_path, pdf_bytes(b"a", pages=5))
     with pytest.raises(ValueError):
         extract_range(source, tmp_path / "part.pdf", 4, 9)
+
+
+def _deeply_nested_pdf(depth: int) -> bytes:
+    """A one-page PDF whose page tree is `depth` levels deep.
+
+    What merging a hundred documents into one produces: each merge wraps the tree in
+    another intermediate node. Entirely legal, and pypdf 6.16.2 refuses it past 100.
+    """
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    root = writer._pages  # the /Pages node the page hangs from
+
+    for _ in range(depth - 1):
+        intermediate = DictionaryObject()
+        intermediate.update(
+            {
+                NameObject("/Type"): NameObject("/Pages"),
+                NameObject("/Count"): NumberObject(1),
+                NameObject("/Kids"): ArrayObject([root.get_object()["/Kids"][0]]),
+            }
+        )
+        reference = writer._add_object(intermediate)
+        root.get_object()[NameObject("/Kids")] = ArrayObject([reference])
+
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def test_a_deeply_nested_page_tree_is_not_a_damaged_file(tmp_path):
+    """The regression that told an operator to re-export a working document.
+
+    pypdf 6.16.2 caps the page tree at 100 levels; a contract collection assembled from a
+    hundred PDFs is 101. The file is legal, the converter reads it with a different
+    backend entirely, and this check must not be the strictest thing in the stack.
+    """
+    path = tmp_path / "merged.pdf"
+    path.write_bytes(_deeply_nested_pdf(depth=120))
+
+    assert page_count(path) == 1
+
+
+def test_the_depth_ceiling_is_raised_but_still_a_ceiling():
+    """Removed entirely, a page tree that recurses without end would run until Python's
+    own stack gave out."""
+    from pypdf import _doc_common
+
+    assert _doc_common.PAGE_TREE_MAX_DEPTH == pdfinfo.PAGE_TREE_MAX_DEPTH
+    assert 100 < pdfinfo.PAGE_TREE_MAX_DEPTH < 900

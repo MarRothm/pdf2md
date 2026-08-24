@@ -30,9 +30,17 @@ ENCRYPTION_TAIL_BYTES = 8192
 
 
 class Rejection(Exception):
-    def __init__(self, reason: str) -> None:
+    """A refusal, with the sentence the operator reads and the one the library raised.
+
+    `detail` exists because the two are not the same claim: "the file looks damaged" is a
+    conclusion drawn from an exception, and when the conclusion is wrong there has to be
+    something recorded to notice that by (FR-019).
+    """
+
+    def __init__(self, reason: str, detail: str | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.detail = detail
 
 
 @router.post("/uploads", status_code=202, response_model=UploadResponse)
@@ -60,14 +68,14 @@ async def create_upload(
             content_hash, size_bytes = await _store_upload(upload, filename, storage, settings)
         except Rejection as rejection:
             rejected.append(RejectedUpload(filename=filename, reason=rejection.reason))
-            logger.info('upload_rejected file="%s" reason="%s"', filename, rejection.reason)
+            _log_rejection(filename, rejection)
             continue
 
         try:
             pages = _inspect_pages(storage.inbox_file(content_hash), filename, settings)
         except Rejection as rejection:
             rejected.append(RejectedUpload(filename=filename, reason=rejection.reason))
-            logger.info('upload_rejected file="%s" reason="%s"', filename, rejection.reason)
+            _log_rejection(filename, rejection)
             continue
 
         db.upsert_source_document(
@@ -141,6 +149,21 @@ async def _store_upload(
     return content_hash, size
 
 
+def _log_rejection(filename: str, rejection: Rejection) -> None:
+    """The sentence the operator sees, and the one the library actually raised.
+
+    Only the first was logged. "The file looks damaged" is a conclusion, and when it is
+    wrong there was nothing else recorded to notice that by — the structural reader's own
+    words never left the process (FR-019).
+    """
+    logger.info(
+        'upload_rejected file="%s" reason="%s" detail="%s"',
+        filename,
+        rejection.reason,
+        rejection.detail or "-",
+    )
+
+
 def _inspect_pages(path: Path, filename: str, settings: Settings) -> int:
     """Read the page count and decide the document's fate here, not forty minutes later.
 
@@ -159,7 +182,8 @@ def _inspect_pages(path: Path, filename: str, settings: Settings) -> int:
     except UnreadablePdfError as error:
         raise Rejection(
             f'"{filename}" could not be read — the file looks damaged or incomplete. '
-            "Try re-saving or re-exporting it, then upload it again."
+            "Try re-saving or re-exporting it, then upload it again.",
+            detail=str(error),
         ) from error
 
     if pages > settings.max_total_pages:

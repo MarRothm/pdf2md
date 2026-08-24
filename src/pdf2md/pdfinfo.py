@@ -15,6 +15,38 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError
 
+PAGE_TREE_MAX_DEPTH = 250
+"""How deeply nested a page tree we are willing to read.
+
+pypdf 6.16.2 introduced a limit of 100 and refuses anything deeper, which is a sensible
+guard against a file whose page tree recurses without end. It is not a sensible verdict on
+a document: merging PDFs nests the tree one level per merge, so a contract collection
+assembled from a hundred documents is 101 deep and entirely legal. That document had
+converted here for weeks; the release arrived, the next image build picked it up, and the
+operator was told their file was damaged and to re-export it.
+
+Raised, not removed — an unbounded tree would recurse until Python's own stack gave out,
+and 250 is far enough above a plausible document to be a real ceiling while staying well
+below it. Applied defensively: the constant is private and may move or vanish, in which
+case the library's own limit stands and this does nothing.
+
+**This check must never be stricter than the converter.** The engine reads PDFs with its
+own backend, not with pypdf, so a file refused here is a file the system could have
+converted — the worst kind of rejection, because nothing downstream ever gets to disagree.
+"""
+
+
+def _raise_page_tree_limit() -> None:
+    try:
+        from pypdf import _doc_common
+    except ImportError:  # pragma: no cover - the module has been there since 4.x
+        return
+    if getattr(_doc_common, "PAGE_TREE_MAX_DEPTH", 0) < PAGE_TREE_MAX_DEPTH:
+        _doc_common.PAGE_TREE_MAX_DEPTH = PAGE_TREE_MAX_DEPTH
+
+
+_raise_page_tree_limit()
+
 
 class PdfStructureError(Exception):
     """The PDF could not be understood well enough to decide what to do with it."""

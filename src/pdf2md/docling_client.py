@@ -92,7 +92,23 @@ _FAILURE_PATTERNS: list[tuple[tuple[str, ...], str]] = [
         "application.",
     ),
     (
-        ("pdfium", "corrupt", "damaged", "malformed", "eof", "parse", "invalid pdf", "cannot read"),
+        # Specific phrases only. A bare "parse" was here, and the engine's default PDF
+        # backend is *named* `docling_parse` — so any error mentioning the backend, about
+        # anything at all, was reported to the operator as a damaged file. Telling someone
+        # to re-export a perfectly good PDF is worse than admitting we do not know.
+        (
+            "pdfium",
+            "corrupt",
+            "damaged",
+            "malformed",
+            "unexpected eof",
+            "parse error",
+            "failed to parse",
+            "could not parse",
+            "unparseable",
+            "invalid pdf",
+            "cannot read",
+        ),
         "This PDF could not be read — the file looks damaged or incomplete. "
         "Try re-saving or re-exporting it, then upload it again.",
     ),
@@ -109,9 +125,15 @@ _FAILURE_PATTERNS: list[tuple[tuple[str, ...], str]] = [
 ]
 
 _GENERIC_FAILURE = (
-    "This document could not be converted. Upload it again; if it fails a second time "
-    "the PDF is probably damaged."
+    "This document could not be converted. The converter's reason is not one this service "
+    "recognises, so its exact words are in the details. Try it again if it converted before."
 )
+"""Deliberately not "the PDF is probably damaged", which is what this said.
+
+Guessing damage is how an operator gets sent to re-export a document that converted
+perfectly well the week before, while the actual cause goes unlooked-at. When the engine's
+words do not match anything known, the honest answer is to say so and point at them.
+"""
 
 
 class DoclingClient:

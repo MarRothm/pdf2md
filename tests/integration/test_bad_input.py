@@ -1,8 +1,10 @@
 """Corrupt and unreadable documents end failed, with nothing in the outbox (FR-007)."""
 
+import logging
+
 import pytest
 
-from tests.conftest import pdf_bytes
+from tests.conftest import damaged_pdf_bytes, pdf_bytes
 from tests.stubs.docling_stub import TaskBehavior
 
 pytestmark = pytest.mark.integration
@@ -80,3 +82,18 @@ async def test_a_page_limit_failure_says_so_rather_than_blaming_the_file(
     assert "2413" not in detail["failure_reason"], "engine detail belongs in engine_errors"
     assert detail["engine_errors"] == ["Document has too many pages (2413 > 2000)"]
     assert list(storage.outbox_path.glob("*.md")) == []
+
+
+async def test_a_refused_upload_records_what_the_reader_actually_said(upload, caplog):
+    """The message is a conclusion; the library's own words are the evidence for it.
+
+    Logging only the conclusion is how a stricter PDF reader — shipped by a floating
+    dependency — reads as "your file is damaged" with nothing anywhere to contradict it.
+    """
+    with caplog.at_level(logging.INFO, logger="pdf2md.api.uploads"):
+        response = await upload(("broken.pdf", damaged_pdf_bytes()))
+
+    assert response.json()["rejected"][0]["reason"].startswith('"broken.pdf" could not be read')
+    rejection = next(r for r in caplog.records if "upload_rejected" in r.getMessage())
+    assert 'detail="' in rejection.getMessage()
+    assert 'detail="-"' not in rejection.getMessage(), "the reader's own words must survive"
